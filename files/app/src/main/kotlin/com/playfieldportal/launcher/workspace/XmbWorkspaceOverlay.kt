@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -241,9 +242,10 @@ fun XmbWorkspaceOverlay(
         ) {
             Box(Modifier.fillMaxSize().background(Color(0x66040917))) {
                 Row(
-                    Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(24.dp))
                         .background(Tab).border(1.dp, Line, RoundedCornerShape(24.dp))
+                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
@@ -355,8 +357,9 @@ fun XmbWorkspaceOverlay(
                 }
 
                 Row(
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 5.dp)
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
                         .clip(RoundedCornerShape(16.dp)).background(Tab)
+                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
