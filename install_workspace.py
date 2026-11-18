@@ -130,7 +130,6 @@ def plan_install(repo):
 ''')], gradle)
         text = anchored(text, [('    buildFeatures {\n', '''    testOptions {
         unitTests { isIncludeAndroidResources = true }
-        targetSdk = 36
     }
     buildFeatures {
 ''')], gradle)
