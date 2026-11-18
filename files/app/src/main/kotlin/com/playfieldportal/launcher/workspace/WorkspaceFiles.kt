@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,6 +31,13 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+
+internal data class WorkspaceTransfer(val items: List<WorkspaceDocument>, val move: Boolean)
+internal object WorkspaceFileClipboard { val pending = MutableStateFlow<WorkspaceTransfer?>(null) }
 
 internal data class WorkspaceDocument(val uri: Uri, val name: String, val mime: String, val size: Long, val flags: Int) {
     val directory get() = mime == DocumentsContract.Document.MIME_TYPE_DIR
@@ -51,6 +59,7 @@ internal class WorkspaceDocuments(private val context: Context) {
         requireNotNull(document.authority), DocumentsContract.getTreeDocumentId(document))
 
     fun stat(uri: Uri): WorkspaceDocument {
+        if (!DocumentsContract.isTreeUri(uri)) return WorkspaceSharing.describe(context, uri)
         val cursor = resolver.query(uri, columns, android.os.Bundle.EMPTY, null) ?: error("Folder or file provider is unavailable")
         return cursor.use {
             check(it.moveToFirst()) { "File or folder no longer exists" }
@@ -99,7 +108,8 @@ internal class WorkspaceDocuments(private val context: Context) {
     }
 
     /** Snapshot first, reject descendant targets, roll back our new target if copying fails. */
-    suspend fun copy(source: WorkspaceDocument, destination: Uri, move: Boolean, progress: (String) -> Unit): String {
+    suspend fun copy(source: WorkspaceDocument, destination: Uri, move: Boolean,
+        onMoved: ((List<Triple<Uri, Uri, Uri>>) -> Unit)? = null, progress: (String) -> Unit): String {
         check(stat(destination).directory) { "Destination must be a folder" }
         check(identity(source.uri) != identity(destination)) { "Choose a different destination" }
         data class Node(val doc: WorkspaceDocument, val path: List<String>)
@@ -125,6 +135,7 @@ internal class WorkspaceDocuments(private val context: Context) {
         var suffix = 1
         while (targetName in existing) { targetName = "${source.name} (copy ${suffix++})" }
         val folders = mutableMapOf<List<String>, Uri>()
+        val moved = mutableListOf<Triple<Uri, Uri, Uri>>()
         var created: Uri? = null
         try {
             for ((index, node) in nodes.withIndex()) {
@@ -135,6 +146,7 @@ internal class WorkspaceDocuments(private val context: Context) {
                 val uri = DocumentsContract.createDocument(resolver, parent, node.doc.mime, name)
                     ?: error("Destination cannot create ${node.doc.name}")
                 if (created == null) created = uri
+                moved.add(Triple(node.doc.uri, uri, parent))
                 if (node.doc.directory) folders[node.path] = uri
                 else {
                     val input = resolver.openInputStream(node.doc.uri) ?: error("Cannot read ${node.doc.name}")
@@ -158,7 +170,7 @@ internal class WorkspaceDocuments(private val context: Context) {
             throw e
         }
         if (move) {
-            return if (runCatching { delete(source) }.isSuccess) "Moved ${source.name}"
+            return if (runCatching { delete(source) }.isSuccess) { onMoved?.invoke(moved); "Moved ${source.name}" }
                 else "Copied ${source.name}; source could not be removed and was retained"
         }
         return "Copied ${source.name}"
@@ -173,11 +185,12 @@ internal fun openWorkspaceDocument(context: Context, document: WorkspaceDocument
         clipData = ClipData.newRawUri(document.name, document.uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, if (share) "Share ${document.name}" else "Open ${document.name}"))
+    context.startActivity(Intent.createChooser(intent, if (share) "Share ${document.name}" else "Open ${document.name}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOpenGame: (Long) -> Unit, requestId: Int = 0) {
+internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOpenGame: (Long) -> Unit, requestId: Int = 0, onPreview: (String) -> Unit = {}) {
     val context = LocalContext.current
     val documents = remember { WorkspaceDocuments(context) }
     val scope = rememberCoroutineScope()
@@ -196,6 +209,15 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
     var prompt by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
     var transfer by remember { mutableStateOf<Pair<WorkspaceDocument, Boolean>?>(null) }
+    var chosen by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectMode by rememberSaveable { mutableStateOf(false) }
+    var sort by rememberSaveable { mutableStateOf(0) }
+    var batchDelete by remember { mutableStateOf(false) }
+    var tagDialog by remember { mutableStateOf(false) }; var batchTag by remember { mutableStateOf("") }
+    var breadcrumbs by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    val clipboard by WorkspaceFileClipboard.pending.collectAsState()
+    val picked = listing.items.filter { it.uri.toString() in chosen }
+    fun toggle(doc: WorkspaceDocument) { val id = doc.uri.toString(); chosen = if (id in chosen) chosen - id else chosen + id }
     fun work(block: suspend () -> String) {
         if (busy) return
         scope.launch {
@@ -211,11 +233,28 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         prefs.edit().putString("file_location", uri).apply()
     }
     LaunchedEffect(location, requestId) { if (location != null && current != location) navigate(location) }
+    LaunchedEffect(current) { chosen = emptySet(); selectMode = false }
     LaunchedEffect(current, revision, limit) {
         val uri = current?.let(Uri::parse) ?: return@LaunchedEffect
         workspaceResult { withContext(Dispatchers.IO) { documents.stat(uri) to documents.children(uri, limit) } }
             .onSuccess { title = it.first.name; listing = it.second }
             .onFailure { listing = DocumentListing(emptyList(), false); status = it.message ?: "Reconnect folder permission" }
+    }
+    LaunchedEffect(current, history.toList(), revision) {
+        breadcrumbs = withContext(Dispatchers.IO) { (history.toList() + listOfNotNull(current)).distinct().takeLast(8).map { uri ->
+            uri to runCatching { documents.stat(Uri.parse(uri)).name }.getOrDefault("Folder")
+        } }
+    }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(current, owner) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper()); val reload = Runnable { revision++ }
+        val observer = object : android.database.ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) { handler.removeCallbacks(reload); handler.postDelayed(reload, 400) }
+        }
+        val listener = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
+        owner.lifecycle.addObserver(listener)
+        current?.let { runCatching { context.contentResolver.registerContentObserver(Uri.parse(it), true, observer) } }
+        onDispose { handler.removeCallbacks(reload); context.contentResolver.unregisterContentObserver(observer); owner.lifecycle.removeObserver(listener) }
     }
     BackHandler(enabled = history.isNotEmpty() && !busy) { current = history.removeAt(history.lastIndex) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -234,7 +273,8 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         if (uri != null && job != null) work {
             withContext(Dispatchers.IO) {
                 documents.grant(uri)
-                val result = documents.copy(job.first, documents.rootDocument(uri), job.second) { status = it }
+                val result = documents.copy(job.first, documents.rootDocument(uri), job.second,
+                    onMoved = { catalog.movedDocuments(it, documents) }) { status = it }
                 catalog.addRoot(uri, documents.stat(documents.rootDocument(uri)).name)
                 catalog.scanRoot(uri)
                 current?.let { here -> catalog.scanRoot(documents.treeFor(Uri.parse(here))) }
@@ -250,26 +290,64 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
                 current?.let { current = documents.rootDocument(Uri.parse(it)).toString(); history.clear() }
             }) { Text("Root") }
             TextButton(enabled = !busy, onClick = { revision++ }) { Text("Refresh") }
+            TextButton(enabled = !busy, onClick = { selectMode = !selectMode; chosen = emptySet() }) { Text(if (selectMode) "Done selecting" else "Select files") }
+            TextButton(onClick = { sort = (sort + 1) % 4 }) { Text("Sort: ${listOf("Name ↑", "Name ↓", "Size", "Type")[sort]}") }
             TextButton(enabled = !busy && current != null, onClick = { name = ""; prompt = "New folder" }) { Text("New folder") }
             TextButton(enabled = !busy && current != null, onClick = { work {
                 withContext(Dispatchers.IO) { catalog.scanRoot(documents.treeFor(Uri.parse(current!!))).status }
             } }) { Text("Index") }
         }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            breadcrumbs.forEach { (uri, label) -> TextButton(onClick = {
+                val index = history.indexOf(uri)
+                if (index >= 0) while (history.size > index) history.removeAt(history.lastIndex)
+                current = uri; query = ""; prefs.edit().putString("file_location", uri).apply()
+            }) { Text(label) } }
+        }
+        if (selectMode || chosen.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState())) {
+            Text("${picked.size} selected", Modifier.padding(top = 12.dp))
+            TextButton(onClick = { chosen = listing.items.filter { it.name.contains(query, true) }.map { it.uri.toString() }.toSet(); selectMode = true }) { Text("Select visible") }
+            TextButton(enabled = picked.isNotEmpty(), onClick = { WorkspaceFileClipboard.pending.value = WorkspaceTransfer(picked, false); status = "${picked.size} items copied to file clipboard; browse a destination and Paste here" }) { Text("Copy") }
+            TextButton(enabled = picked.isNotEmpty(), onClick = { WorkspaceFileClipboard.pending.value = WorkspaceTransfer(picked, true); status = "${picked.size} items ready to move; browse a destination and Paste here" }) { Text("Cut") }
+            TextButton(enabled = picked.isNotEmpty() && picked.none { it.directory }, onClick = { work { WorkspaceApps.shareFiles(context, picked); "" } }) { Text("Share") }
+            TextButton(enabled = picked.isNotEmpty(), onClick = { tagDialog = true }) { Text("Tag") }
+            TextButton(enabled = picked.isNotEmpty(), onClick = { batchDelete = true }) { Text("Delete…") }
+        }
+        clipboard?.let { pending -> Row(Modifier.horizontalScroll(rememberScrollState())) {
+            TextButton(enabled = !busy && current != null, onClick = { val destinationUri = current!!; work { withContext(Dispatchers.IO) {
+                val errors = mutableListOf<String>(); var complete = 0
+                for ((index, source) in pending.items.withIndex()) {
+                    status = "${if (pending.move) "Moving" else "Copying"} ${index + 1}/${pending.items.size}: ${source.name}"
+                    workspaceResult { documents.copy(documents.stat(source.uri), Uri.parse(destinationUri), pending.move,
+                        onMoved = { catalog.movedDocuments(it, documents) }) {} }
+                        .onSuccess { complete++; if (it.contains("could not")) errors.add(it) }.onFailure { errors.add("${source.name}: ${it.message}") }
+                }
+                if (pending.move) WorkspaceFileClipboard.pending.value = null
+                catalog.scanRoot(documents.treeFor(Uri.parse(destinationUri)))
+                pending.items.map { documents.treeFor(it.uri) }.distinct().forEach { catalog.scanRoot(it) }
+                "$complete/${pending.items.size} complete" + if (errors.isEmpty()) "" else " · ${errors.joinToString("; ")}"
+            } } }) { Text("Paste here (${pending.items.size})") }
+            TextButton(onClick = { WorkspaceFileClipboard.pending.value = null }) { Text("Clear file clipboard") }
+        } }
         Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         OutlinedTextField(query, { query = it }, label = { Text("Find in this folder") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 3)
         LazyColumn(Modifier.weight(1f)) {
-            items(listing.items.filter { it.name.contains(query, true) }, key = { it.uri.toString() }) { doc ->
+            items(listing.items.filter { it.name.contains(query, true) }.sortedWith(compareBy<WorkspaceDocument> { !it.directory }.then(
+                when (sort) { 1 -> compareByDescending<WorkspaceDocument> { it.name.lowercase() }; 2 -> compareByDescending { it.size }; 3 -> compareBy { it.mime }; else -> compareBy { it.name.lowercase() } }
+            ).thenBy { it.uri.toString() }), key = { it.uri.toString() }) { doc ->
                 Row(Modifier.fillMaxWidth()) {
-                    Column(Modifier.weight(1f).clickable(enabled = !busy) {
-                        if (doc.directory) navigate(doc.uri.toString())
+                    if (selectMode || chosen.isNotEmpty()) Checkbox(doc.uri.toString() in chosen, { toggle(doc) }, enabled = !busy)
+                    Column(Modifier.weight(1f).combinedClickable(enabled = !busy, onLongClick = { selectMode = true; toggle(doc) }, onClick = {
+                        if (selectMode || chosen.isNotEmpty()) toggle(doc)
+                        else if (doc.directory) navigate(doc.uri.toString())
                         else work {
                             val game = withContext(Dispatchers.IO) { catalog.gameIdForFile(doc.uri.toString()) }
-                            if (game != null) onOpenGame(game) else openWorkspaceDocument(context, doc)
+                            if (game != null) onOpenGame(game) else onPreview(doc.uri.toString())
                             ""
                         }
-                    }.padding(8.dp)) {
+                    }).padding(8.dp)) {
                         Text((if (doc.directory) "▣  " else "◇  ") + doc.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (!doc.directory) Text("${doc.size / 1024} KB · ${doc.mime}", style = MaterialTheme.typography.labelSmall)
                     }
@@ -287,6 +365,7 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
             Column {
                 Text(if (doc.directory) "Folder" else "${doc.mime} · ${doc.size} bytes")
                 if (!doc.directory) {
+                    TextButton(onClick = { selected = null; onPreview(doc.uri.toString()) }) { Text("Preview in workspace") }
                     TextButton(onClick = { selected = null; work { openWorkspaceDocument(context, doc); "" } }) { Text("Open with…") }
                     TextButton(onClick = { selected = null; work { openWorkspaceDocument(context, doc, true); "" } }) { Text("Share") }
                 }
@@ -324,4 +403,21 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         }) { Text(if (action == "Delete") "Delete permanently" else "Save") } },
             dismissButton = { TextButton(onClick = { prompt = null }) { Text("Cancel") } })
     }
+    if (tagDialog) WorkspaceDialog({ tagDialog = false }, { Text("Tag ${picked.size} items") }, {
+        OutlinedTextField(batchTag, { batchTag = it.take(48) }, label = { Text("Shared library tag") })
+    }, { TextButton(enabled = batchTag.isNotBlank(), onClick = { tagDialog = false; work { withContext(Dispatchers.IO) {
+        picked.forEach { doc ->
+            if (catalog.get("file:${doc.uri}") == null) catalog.registerDocument(doc, "saf:${documents.treeFor(doc.uri)}")
+            val game = catalog.gameIdForFile(doc.uri.toString()); val key = if (game == null) "file:${doc.uri}" else "pfp-game:$game"
+            catalog.addTag(key, batchTag)
+        }
+        "Tag applied to ${picked.size} items"
+    } } }) { Text("Apply tag") } }, { TextButton(onClick = { tagDialog = false }) { Text("Cancel") } })
+    if (batchDelete) WorkspaceDialog({ batchDelete = false }, { Text("Delete ${picked.size} items permanently?") }, {
+        Text("The selected files and folders will be deleted from their source. This cannot be undone.")
+    }, { TextButton(onClick = { val targets = picked.toList(); batchDelete = false; work { withContext(Dispatchers.IO) {
+        val failures = mutableListOf<String>(); targets.forEach { doc -> runCatching { documents.delete(doc) }.onFailure { failures.add("${doc.name}: ${it.message}") } }
+        current?.let { catalog.scanRoot(documents.treeFor(Uri.parse(it))) }; chosen = emptySet()
+        "Deleted ${targets.size - failures.size}/${targets.size}" + if (failures.isEmpty()) "" else " · ${failures.joinToString("; ")}"
+    } } }) { Text("Delete permanently") } }, { TextButton(onClick = { batchDelete = false }) { Text("Cancel") } })
 }

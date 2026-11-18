@@ -51,6 +51,9 @@ internal fun UnifiedLibraryPane(
     onOpenWorkspaceTool: (String) -> Unit,
     onBrowseFolder: (String) -> Unit,
     initialQuery: String = "",
+    onPreview: (String) -> Unit = {},
+    onOpenPfpFeature: (String) -> Unit = {},
+    onSpaceCreated: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
@@ -120,13 +123,13 @@ internal fun UnifiedLibraryPane(
                 val game = withContext(Dispatchers.IO) { catalog.gameIdForFile(entry.target) }
                 if (game != null) onOpenPfpGame(game)
                 else {
-                    val document = withContext(Dispatchers.IO) { WorkspaceDocuments(context).stat(Uri.parse(entry.target)) }
-                    openWorkspaceDocument(context, document)
+                    onPreview(entry.target)
                 }
             }
             "COMMAND" -> onRunCommand(entry.target)
             "LINK" -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.target)))
-            "TOOL" -> if (entry.target.startsWith("arcdeck:")) onOpenWorkspaceTool(entry.target.removePrefix("arcdeck:"))
+            "TOOL" -> if (entry.target.startsWith("pfp:")) onOpenPfpFeature(entry.target.removePrefix("pfp:"))
+                else if (entry.target.startsWith("arcdeck:")) onOpenWorkspaceTool(entry.target.removePrefix("arcdeck:"))
                 else context.startActivity(Intent(entry.target))
         }
         ""
@@ -247,6 +250,19 @@ internal fun UnifiedLibraryPane(
         WorkspaceDialog(onDismissRequest = { selected = null }, title = { Text(entry.title, maxLines = 2) }, text = {
             Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("${entry.kind.lowercase()} · ${entry.source}", style = MaterialTheme.typography.bodySmall)
+                if (entry.kind in setOf("APP", "GAME", "SHORTCUT")) TextButton(enabled = !busy, onClick = { work {
+                    withContext(Dispatchers.IO) {
+                        val store = WorkspaceSpaces.shared(context)
+                        val existing = if (entry.kind == "APP") store.all().find { it.app == entry.target } else null
+                        if (existing != null) store.select(existing.id)
+                        else store.create((entry.alias ?: entry.title).take(60), if (entry.kind == "APP") entry.target else "", catalog, entry.key)
+                    }
+                    selected = null; onSpaceCreated(); "Space ready"
+                } }) { Text(if (entry.kind == "APP") "Open or create app space" else "Create game space") }
+                WorkspaceSpaces.shared(context).active()?.let { space -> TextButton(enabled = !busy, onClick = {
+                    mutate("Added to ${space.name}") { WorkspaceSpaces.shared(context).attach(space, entry.key, catalog) }
+                }) { Text("Attach to ${space.name}") } }
+                if (entry.kind == "APP") WorkspaceAppActions(entry.target)
                 OutlinedTextField(alias, { alias = it.take(120) }, label = { Text("Display alias") }, singleLine = true)
                 TextButton(enabled = !busy, onClick = { mutate { catalog.rename(entry.key, alias) } }) { Text("Save display alias") }
                 Row(Modifier.horizontalScroll(rememberScrollState())) {

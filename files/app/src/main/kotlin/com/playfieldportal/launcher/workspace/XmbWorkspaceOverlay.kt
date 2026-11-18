@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -42,6 +43,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -97,9 +101,10 @@ import kotlin.math.roundToInt
  * This source file contains no upstream Play Field Portal source code or artwork.
  */
 private enum class Tool(val title: String, val symbol: String) {
-    SEARCH("Search", "⌕"), LIBRARY("Library", "▤"), COLLECTIONS("Collections", "◇"),
+    SPACES("Spaces", "◈"), SEARCH("Search", "⌕"), LIBRARY("Library", "▤"), COLLECTIONS("Collections", "◇"),
     FILES("Files", "▣"), APPS("Apps", "▦"),
-    TERMINAL("Terminal", ">_"), NOTES("Notes", "✎"), SYSTEM("System", "⚙")
+    TERMINAL("Terminal", ">_"), NOTES("Notes", "✎"), PFP("PFP features", "⌂"),
+    CUSTOMIZE("Customize", "◐"), PREVIEW("Preview", "◉"), SYSTEM("System", "⚙")
 }
 
 private data class Panel(
@@ -115,11 +120,11 @@ private data class Panel(
 )
 
 
-private val Ink = Color(0xE811203D)
+private val Ink: Color @Composable get() = LocalWorkspaceAppearance.current.ink
 private val Ice = Color(0xFFCAE8FF)
-private val Accent = Color(0xFF75BEFF)
-private val Line = Color(0x5579BFFF)
-private val Tab = Color(0xEE152C4B)
+private val Accent: Color @Composable get() = LocalWorkspaceAppearance.current.accent
+private val Line: Color @Composable get() = LocalWorkspaceAppearance.current.accent.copy(alpha = 0.35f)
+private val Tab: Color @Composable get() = LocalWorkspaceAppearance.current.surface
 
 private fun loadPanels(context: Context): List<Panel> {
     return runCatching {
@@ -174,11 +179,20 @@ fun XmbWorkspaceOverlay(
     games: List<Game>?,
     onOpenPfpGame: (Long) -> Unit,
     onSetPfpFavorite: (Long, Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    pfpSections: List<Pair<String, String>> = emptyList(),
+    onOpenPfpFeature: (String) -> Unit = {},
+    onSystemUiChanged: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
+    val appearance = rememberWorkspaceAppearance()
+    val nativeBars = workspaceFlag("system_bars", false)
+    val autoIndex = workspaceFlag("auto_index", true)
+    val indexStatus by WorkspaceIndexing.status.collectAsState()
+    val externalRequest by WorkspaceRequests.requests.collectAsState()
+    LaunchedEffect(nativeBars) { onSystemUiChanged() }
     val paneState = rememberSaveableStateHolder()
     val panels = remember { mutableStateListOf<Panel>().apply {
         val saved = loadPanels(context)
@@ -191,6 +205,7 @@ fun XmbWorkspaceOverlay(
     var commandRequest by remember { mutableStateOf(0) }
     var fileLocation by remember { mutableStateOf<String?>(null) }
     var fileRequest by remember { mutableStateOf(0) }
+    var previewUri by remember { mutableStateOf<String?>(null) }
     val catalog = remember { UnifiedCatalog.shared(context) }
     var catalogRevision by remember { mutableStateOf(0) }
     var catalogError by remember { mutableStateOf<String?>(null) }
@@ -222,6 +237,11 @@ fun XmbWorkspaceOverlay(
             }
         }.onSuccess { catalogRevision++; catalogError = null }
             .onFailure { catalogError = "App indexing failed: ${it.message}" }
+    }
+    LaunchedEffect(pfpSections) { withContext(Dispatchers.IO) { catalog.syncPfpFeatures(pfpSections) } }
+    LaunchedEffect(resumeRevision, autoIndex) {
+        if (autoIndex) workspaceResult { WorkspaceIndexing.refresh(catalog) }
+            .onFailure { catalogError = "Folder refresh failed: ${it.message}" }
     }
 
     DisposableEffect(context) {
@@ -255,14 +275,20 @@ fun XmbWorkspaceOverlay(
             update(old.id) { it.copy(minimized = false, order = topOrder++) }
         } else {
             val stagger = (panels.size % 5) * 23f
-            panels.add(Panel(nextId++, tool, 12f + stagger, 64f + stagger, maximized = configuration.screenWidthDp < 600, order = topOrder++))
+            panels.add(Panel(nextId++, tool, 12f + stagger, 64f + stagger, maximized = configuration.screenWidthDp < 600 && appearance.maximizePhone, order = topOrder++))
         }
         onSound(MenuSound.SELECT)
     }
 
-    MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = Color(0xFF081C30),
-        surface = Color(0xFF172F4A), onSurface = Ice, background = Ink, onBackground = Ice)) {
-    BoxWithConstraints(modifier.fillMaxSize().zIndex(10000f)) {
+    LaunchedEffect(externalRequest.serial) {
+        if (externalRequest.serial > 0) activate(Tool.entries.firstOrNull { it.name == externalRequest.tool } ?: Tool.SPACES)
+    }
+    fun preview(uri: String) { previewUri = uri; activate(Tool.PREVIEW) }
+    CompositionLocalProvider(LocalWorkspaceAppearance provides appearance,
+        LocalDensity provides Density(density.density, density.fontScale * appearance.font)) {
+    MaterialTheme(colorScheme = darkColorScheme(primary = appearance.accent, onPrimary = Color(0xFF081C30),
+        surface = appearance.surface, onSurface = Ice, background = appearance.ink, onBackground = Ice)) {
+    BoxWithConstraints(modifier.fillMaxSize().then(if (nativeBars) Modifier.safeDrawingPadding() else Modifier).zIndex(10000f)) {
         val viewportWidth = maxWidth.value
         val viewportHeight = maxHeight.value
         val screenWidthPx = with(density) { maxWidth.toPx() }
@@ -284,23 +310,29 @@ fun XmbWorkspaceOverlay(
             enter = fadeIn() + scaleIn(initialScale = 0.985f),
             exit = fadeOut() + scaleOut(targetScale = 0.985f)
         ) {
-            Box(Modifier.fillMaxSize().background(Color(0x66040917))) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = appearance.dim))) {
+                if (indexStatus.isNotBlank()) Text(indexStatus,
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp).background(Tab).padding(6.dp),
+                    color = Ice, fontSize = 11.sp, maxLines = 1)
                 Row(
                     Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(24.dp))
                         .background(Tab).border(1.dp, Line, RoundedCornerShape(24.dp))
-                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
-                    Tool.entries.forEach { tool ->
+                    Text("⌂ PFP", Modifier.clickable { onOpenPfpFeature("original") }.padding(horizontal = 9.dp, vertical = 7.dp), color = Ice, fontSize = 12.sp)
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                    Tool.entries.filter { it != Tool.PREVIEW && (it.name !in appearance.hidden || it in setOf(Tool.PFP, Tool.CUSTOMIZE)) }
+                        .sortedBy { appearance.dockOrder.indexOf(it.name).takeIf { i -> i >= 0 } ?: (100 + it.ordinal) }.forEach { tool ->
                         Text(
                             "${tool.symbol} ${tool.title}",
                             Modifier.testTag("workspace-tool-${tool.name}").clip(RoundedCornerShape(14.dp))
                                 .clickable { activate(tool) }
-                                .padding(horizontal = 9.dp, vertical = 7.dp),
+                                .padding(horizontal = if (appearance.compact) 6.dp else 9.dp, vertical = 7.dp),
                             color = Ice, fontSize = 12.sp
                         )
+                    }
                     }
                     Text("×", Modifier.clickable { onSound(MenuSound.BACK); onClose() }
                         .padding(horizontal = 9.dp, vertical = 7.dp), color = Ice)
@@ -326,14 +358,14 @@ fun XmbWorkspaceOverlay(
                             Modifier.zIndex(1f + panel.order)
                                 .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
                                 .width(drawWidth).height(drawHeight)
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(Brush.verticalGradient(listOf(Color(0xF21E3B60), Ink)))
-                                .border(1.dp, Line, RoundedCornerShape(15.dp))
+                                .clip(RoundedCornerShape(appearance.corners.dp))
+                                .background(Brush.verticalGradient(listOf(appearance.surface, Ink)))
+                                .border(1.dp, Line, RoundedCornerShape(appearance.corners.dp))
                                 .clickable { update(panel.id) { it.copy(order = topOrder++) } }
                         ) {
                             Row(
                                 Modifier.fillMaxWidth().height(42.dp)
-                                    .background(Color(0xAA143255))
+                                    .background(appearance.surface)
                                     .pointerInput(panel.id, panel.maximized) {
                                         if (!panel.maximized) detectDragGestures { change, delta ->
                                             change.consume()
@@ -381,15 +413,26 @@ fun XmbWorkspaceOverlay(
                                             val tool = Tool.entries.firstOrNull { it.name.equals(id, true) }
                                             if (tool != null) activate(tool)
                                         },
+                                        onPreview = ::preview,
+                                        onOpenPfpFeature = onOpenPfpFeature,
+                                        onSpaceCreated = { activate(Tool.SPACES) },
                                     )
-                                    Tool.FILES -> WorkspaceFilesPane(catalog, fileLocation, onOpenPfpGame, fileRequest)
+                                    Tool.FILES -> WorkspaceFilesPane(catalog, fileLocation, onOpenPfpGame, fileRequest, ::preview)
                                     Tool.APPS -> UnifiedLibraryPane(catalog, catalogRevision, catalogError, false,
                                         onOpenPfpGame, onSetPfpFavorite, { queuedCommand = it; commandRequest++; activate(Tool.TERMINAL) },
                                         { id -> Tool.entries.firstOrNull { it.name.equals(id, true) }?.let { activate(it) } },
-                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, initialQuery = "type:app")
+                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, initialQuery = "type:app",
+                                        onPreview = ::preview, onOpenPfpFeature = onOpenPfpFeature, onSpaceCreated = { activate(Tool.SPACES) })
+                                    Tool.SPACES -> WorkspaceSpacePane(catalog, ::preview,
+                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, onOpenPfpGame,
+                                        { command -> queuedCommand = command; commandRequest++; activate(Tool.TERMINAL) })
+                                    Tool.PREVIEW -> WorkspacePreviewPane(previewUri)
+                                    Tool.PFP -> WorkspacePfpPane(pfpSections, onOpenPfpFeature)
+                                    Tool.CUSTOMIZE -> WorkspaceAppearancePane(Tool.entries.filter { it != Tool.PREVIEW }.map { it.name to it.title },
+                                        { savePanels(context, panels.toList()) }, onOpenPfpFeature)
                                     Tool.TERMINAL -> WorkspaceTerminalPane(queuedCommand, commandRequest)
                                     Tool.NOTES -> WorkspaceNotesPane()
-                                    Tool.SYSTEM -> SystemTool(onClose) {
+                                    Tool.SYSTEM -> SystemTool(onClose, onSystemUiChanged) {
                                         panels.clear()
                                         panels.add(Panel(nextId++, Tool.SEARCH, 12f, 64f, maximized = configuration.screenWidthDp < 600))
                                     }
@@ -438,6 +481,7 @@ fun XmbWorkspaceOverlay(
         }
     }
     }
+    }
 }
 
 @Composable
@@ -448,13 +492,14 @@ private fun FrameControl(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SystemTool(onClose: () -> Unit, onReset: () -> Unit) {
+private fun SystemTool(onClose: () -> Unit, onSystemUiChanged: () -> Unit, onReset: () -> Unit) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
     var shortcut by remember { mutableStateOf(preferences.getInt("workspace_key", android.view.KeyEvent.KEYCODE_F10)) }
     var landscape by remember { mutableStateOf(preferences.getBoolean("landscape_prompt", false)) }
     var editShortcut by remember { mutableStateOf(false) }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        WorkspaceAndroidControls(onSystemUiChanged)
         ListAction("⚙  Android settings") { openSystem(context, Settings.ACTION_SETTINGS) }
         ListAction("⌂  Change default home app") { openSystem(context, Settings.ACTION_HOME_SETTINGS) }
         ListAction("▣  File manager") { openSystem(context, Settings.ACTION_INTERNAL_STORAGE_SETTINGS) }
@@ -471,7 +516,7 @@ private fun SystemTool(onClose: () -> Unit, onReset: () -> Unit) {
             landscape = !landscape; preferences.edit().putBoolean("landscape_prompt", landscape).apply()
         }
         ListAction("▦  Reset window layout") { onReset() }
-        Text("ArcDeck Workspace 1.0 · Touch WS or use your selected shortcut. Use Library → Collections for backup and storage roots.",
+        Text("ArcDeck Workspace 1.1 · App spaces, floating access and the original PFP share one library. Use Library → Collections for backup and storage roots.",
             color = Ice, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
         ListAction("✕  Close workspace") { onClose() }
     }

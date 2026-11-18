@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import os
 import tempfile
+import re
 
 MAIN_EDITS = [('import com.playfieldportal.launcher.discord.DiscordBootstrap\n',
   'import com.playfieldportal.launcher.discord.DiscordBootstrap\n'
@@ -72,6 +73,66 @@ MAIN_EDITS = [('import com.playfieldportal.launcher.discord.DiscordBootstrap\n',
   '        if (workspaceShowing) return super.onGenericMotionEvent(event)\n'
   '        if (gamepadInputHandler.onMotionEvent(event)) return true\n')]
 
+HOST_BLOCK = '''                            AppXmbHost()
+                            // ArcDeck managed host integration.
+                            val arcDeckGames by remember(arcDeckGameRepository) { arcDeckGameRepository.observeAll() }.collectAsState(initial = null)
+                            val arcDeckPfpState by xmbViewModel.uiState.collectAsState()
+                            XmbWorkspaceOverlay(
+                                expanded = workspaceShowing,
+                                onToggle = { workspaceShowing = !workspaceShowing },
+                                onClose = { workspaceShowing = false },
+                                onSound = { menuSoundPlayer.play(it) },
+                                games = arcDeckGames,
+                                onSetPfpFavorite = { id, favorite ->
+                                    lifecycleScope.launch {
+                                        try { arcDeckGameRepository.setFavorite(id, favorite) }
+                                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                        catch (e: Exception) { android.widget.Toast.makeText(this@MainActivity, e.message ?: "Could not update favorite", android.widget.Toast.LENGTH_LONG).show() }
+                                    }
+                                },
+                                onOpenPfpGame = { id -> workspaceShowing = false; xmbViewModel.openGameDetailFromSettings(id) },
+                                pfpSections = arcDeckPfpState.categories.map { it.id to it.name },
+                                onOpenPfpFeature = { feature ->
+                                    workspaceShowing = false
+                                    if (feature == "original") { /* Preserve the exact original PFP screen. */ }
+                                    else if (arcDeckPfpState.hasBlockingOverlay) {
+                                        android.widget.Toast.makeText(this@MainActivity, "Close the current PFP dialog to switch sections", android.widget.Toast.LENGTH_LONG).show()
+                                    } else when {
+                                        feature.startsWith("category:") -> {
+                                            val index = arcDeckPfpState.categories.indexOfFirst { it.id == feature.removePrefix("category:") }
+                                            if (index >= 0) xmbViewModel.onCategorySelected(index)
+                                        }
+                                        feature == "library" -> xmbViewModel.openLibraryManager()
+                                        feature == "notifications" -> xmbViewModel.onToggleNotificationPanel()
+                                        feature == "player" -> xmbViewModel.openPlayerStatus()
+                                        feature == "icons" -> xmbViewModel.openCustomIcons()
+                                        feature == "layout" -> xmbViewModel.openXmbLayoutAdjust()
+                                        feature == "colors" -> xmbViewModel.openColorSchemePicker()
+                                    }
+                                },
+                                onSystemUiChanged = { hideSystemBars() },
+                            )
+                            // End ArcDeck managed host integration.
+'''
+MAIN_EDITS[3] = (MAIN_EDITS[3][0], HOST_BLOCK)
+
+ACTIVITY_REQUESTS = '''    // ArcDeck external navigation accepts UI destinations, never executable commands.
+    private fun handleArcDeckIntent(request: Intent) {
+        val game = request.getLongExtra("arcdeck_game_id", -1)
+        if (game > 0) { workspaceShowing = false; xmbViewModel.openGameDetailFromSettings(game) }
+        else if (request.getBooleanExtra("arcdeck_open_workspace", false)) {
+            workspaceShowing = true
+            com.playfieldportal.launcher.workspace.WorkspaceRequests.publish(request.getStringExtra("arcdeck_tool") ?: "SPACES")
+        }
+        request.removeExtra("arcdeck_open_workspace"); request.removeExtra("arcdeck_game_id")
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent); handleArcDeckIntent(intent)
+    }
+
+'''
+
 def anchored(source, edits, path):
     for before, after in edits:
         if source.count(before) != 1:
@@ -99,6 +160,27 @@ def plan_install(repo):
             first = text.index(marker)
             last = text.index(base_comment, first) + len(base_comment)
             text = text[:first] + MAIN_EDITS[4][1] + text[last:]
+        start = text.index('                            AppXmbHost()\n')
+        match = re.search(r'^                            \)\n', text[start:], re.M)
+        if not match: raise RuntimeError('ArcDeck host integration was not found')
+        last = start + match.end()
+        end_marker = '                            // End ArcDeck managed host integration.\n'
+        if text[last:].startswith(end_marker): last += len(end_marker)
+        text = text[:start] + HOST_BLOCK + text[last:]
+    if '// ArcDeck external navigation accepts UI destinations' not in text:
+        text = anchored(text, [('    override fun onResume() {\n', ACTIVITY_REQUESTS + '    override fun onResume() {\n'),
+            ('        setContent {\n', '        handleArcDeckIntent(intent)\n        setContent {\n')], activity)
+    if '// ArcDeck native system bars' not in text:
+        text = anchored(text, [('            hide(WindowInsetsCompat.Type.systemBars())',
+            '            // ArcDeck native system bars\n'
+            '            if (getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("system_bars", false))\n'
+            '                show(WindowInsetsCompat.Type.systemBars())\n'
+            '            else hide(WindowInsetsCompat.Type.systemBars())')], activity)
+    if '// ArcDeck resume floating access' not in text:
+        text = anchored(text, [('        super.onResume()\n',
+            '        super.onResume()\n        // ArcDeck resume floating access\n'
+            '        runCatching { com.playfieldportal.launcher.workspace.WorkspaceOverlayService.ensureEnabled(this) }\n'
+            '            .onFailure { Timber.w(it, "Floating workspace could not resume") }\n')], activity)
     rotate = 'val rotatePrompt = showRotatePrompt(orientationMode, LocalConfiguration.current.orientation)'
     if rotate in text:
         text = anchored(text, [(rotate,
@@ -111,7 +193,25 @@ def plan_install(repo):
     if "workspace.WorkspaceTermuxReceiver" not in text:
         text = anchored(text, [('    </application>',
             '        <receiver android:name="com.playfieldportal.launcher.workspace.WorkspaceTermuxReceiver" android:exported="false" />\n    </application>')], manifest)
-    import re
+    if 'workspace.WorkspaceOverlayService' not in text:
+        text = anchored(text, [('    </application>', '''        <service android:name="com.playfieldportal.launcher.workspace.WorkspaceOverlayService"
+            android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled floating workspace for app spaces, notes, files and Android sharing while other apps are in use" />
+        </service>
+        <activity android:name="com.playfieldportal.launcher.workspace.WorkspaceShareActivity"
+            android:exported="true" android:label="Save to ArcDeck" android:theme="@style/Theme.PFP">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+    </application>''')], manifest)
+    for permission in ('SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SPECIAL_USE', 'POST_NOTIFICATIONS'):
+        if f'android.permission.{permission}"' not in text:
+            text = anchored(text, [('    <application\n', f'    <uses-permission android:name="android.permission.{permission}" />\n    <application\n')], manifest)
     text = re.sub(r'android:(icon|roundIcon)="[^"]+"', r'android:\1="@mipmap/arcdeck_launcher"', text)
     text = text.replace('android:screenOrientation="sensorLandscape"', 'android:screenOrientation="fullSensor"')
     result[manifest] = text
@@ -137,9 +237,17 @@ def plan_install(repo):
     text = text.replace('    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n        targetSdk = 36\n    }',
         '    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n    }')
     result[gradle] = text
+    paths = repo / 'app/src/main/res/xml/file_paths.xml'
+    if not paths.is_file(): raise RuntimeError('Missing FileProvider paths')
+    paths_text = paths.read_text()
+    if 'name="arcdeck_shared"' not in paths_text:
+        paths_text = anchored(paths_text, [('</paths>', '    <files-path name="arcdeck_shared" path="arcdeck_shared/" />\n</paths>')], paths)
+    result[paths] = paths_text
     sources = base / 'files/app/src/main/kotlin/com/playfieldportal/launcher/workspace'
     required = {'XmbWorkspaceOverlay.kt', 'UnifiedCatalog.kt', 'UnifiedQuery.kt', 'UnifiedLibraryPane.kt',
-                'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt'}
+                'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt',
+                'WorkspaceSpaces.kt', 'WorkspaceSpacePane.kt', 'WorkspaceSharing.kt', 'WorkspaceOverlayService.kt',
+                'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
     orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'

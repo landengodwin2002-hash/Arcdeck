@@ -130,13 +130,13 @@ jobs:
           apks = list(Path(f'upstream/app/build/outputs/apk/{flavor}/release').glob('*.apk'))
           if len(apks) != 1: raise SystemExit(f'Expected one APK, got {apks}')
           out = Path('dist'); out.mkdir()
-          apk = out / f'ArcDeck-1.0.0-{flavor}-unsigned.apk'
+          apk = out / f'ArcDeck-1.1.0-{flavor}-unsigned.apk'
           shutil.copy2(apks[0], apk)
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
           (out / 'build-info.json').write_text(json.dumps({
               'arcdeck_commit': os.environ['GITHUB_SHA'],
               'upstream_commit': '5ee271ea9545685417aecdd13b5ace033cdb7806',
-              'version': '1.0.0', 'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
+              'version': '1.1.0', 'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
               'sha256': digest, 'signing': 'unsigned; owner signs locally',
               'tests': 'Android database, documents and phone UI regression suite passed',
               'physical_device_tested': False
@@ -147,7 +147,7 @@ jobs:
       - name: Upload release for owner signing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ArcDeck-1.0.0-${{ matrix.flavor }}-unsigned
+          name: ArcDeck-1.1.0-${{ matrix.flavor }}-unsigned
           path: dist/*
           if-no-files-found: error
           retention-days: 30

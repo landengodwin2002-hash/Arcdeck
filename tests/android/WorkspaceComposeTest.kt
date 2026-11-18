@@ -80,4 +80,36 @@ class WorkspaceComposeTest {
             file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
+    @Test fun anInstalledAppCanHaveItsOwnSpaceWithoutDuplicatingItsLibraryRecord() {
+        catalog.syncSource("android", listOf(CatalogEntry("android:com.discord", "APP", "Discord", "Installed app", "com.discord", "android")))
+        compose.setContent { MaterialTheme { WorkspaceSpacePane(catalog, {}, {}, {}, {}) } }
+        compose.onNodeWithText("New app space").performClick(); waitFor("Discord")
+        compose.onNodeWithText("Discord").performClick()
+        compose.onNodeWithText("Save space").performClick(); waitFor("Connected app: com.discord")
+        assertEquals("com.discord", WorkspaceSpaces.shared(context).active()!!.app)
+        compose.onNodeWithText("Open app").assertExists()
+        compose.onNodeWithText("Copy context").assertExists()
+        val directory = System.getProperty("arcdeck.screenshot.dir")
+        if (directory != null) {
+            val file = File(directory, "app-space-phone.png"); file.parentFile!!.mkdirs()
+            file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+    @Test fun originalPfpSectionsRemainReachableFromTheWorkspace() {
+        var requested = ""
+        compose.setContent { MaterialTheme { WorkspacePfpPane(listOf("music" to "Music", "videos" to "Videos", "photos" to "Photos", "social" to "Social")) { requested = it } } }
+        compose.onNodeWithText("Music").performClick()
+        assertEquals("category:music", requested)
+        compose.onNodeWithText("Photos").assertExists()
+        compose.onNodeWithText("Return to original PFP").performClick()
+        assertEquals("original", requested)
+    }
+    @Test fun appSpaceNotesSaveWhenThePanelClosesImmediately() {
+        val store = WorkspaceSpaces.shared(context); val space = store.create("Discord", "com.discord", catalog)
+        val shown = androidx.compose.runtime.mutableStateOf(true)
+        compose.setContent { MaterialTheme { if (shown.value) SpaceNotesEditor(space, store) } }
+        compose.onNodeWithText("Discord notes").performTextInput("Keep across apps")
+        compose.runOnIdle { shown.value = false }; compose.waitForIdle()
+        assertEquals("Keep across apps", store.all().single().notes)
+    }
 }

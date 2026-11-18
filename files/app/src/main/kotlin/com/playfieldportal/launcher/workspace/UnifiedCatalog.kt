@@ -189,7 +189,11 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             Triple("home", "Change home launcher", android.provider.Settings.ACTION_HOME_SETTINGS),
             Triple("wifi", "Wi-Fi settings", android.provider.Settings.ACTION_WIFI_SETTINGS),
             Triple("bluetooth", "Bluetooth settings", android.provider.Settings.ACTION_BLUETOOTH_SETTINGS),
-            Triple("storage", "Storage settings", android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+            Triple("storage", "Storage settings", android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS),
+            Triple("internet_panel", "Internet quick panel", android.provider.Settings.Panel.ACTION_INTERNET_CONNECTIVITY),
+            Triple("volume_panel", "Volume quick panel", android.provider.Settings.Panel.ACTION_VOLUME),
+            Triple("display", "Display settings", android.provider.Settings.ACTION_DISPLAY_SETTINGS),
+            Triple("battery", "Battery settings", android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS)
         ).map { (id, title, action) ->
             CatalogEntry("tool:$id", "TOOL", title, "Android system", action, "system")
         }
@@ -200,11 +204,46 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             Triple("terminal", "Termux command panel", "arcdeck:terminal"),
             Triple("notes", "Workspace notes", "arcdeck:notes"),
             Triple("collections", "Collections and tags", "arcdeck:collections"),
-            Triple("apps", "All installed apps", "arcdeck:apps")
+            Triple("apps", "All installed apps", "arcdeck:apps"),
+            Triple("spaces", "App spaces", "arcdeck:spaces"),
+            Triple("customize", "Customize workspace", "arcdeck:customize"),
+            Triple("pfp", "Original PFP features", "arcdeck:pfp")
         ).map { (id, title, target) ->
             CatalogEntry("workspace:$id", "TOOL", title, "ArcDeck XMB workspace", target, "system")
         }
         syncSource("system", tools + workspace)
+    }
+
+    fun syncPfpFeatures(sections: List<Pair<String, String>>) {
+        if (sections.isNotEmpty()) syncSource("pfp:features", sections.map { (id, title) ->
+            CatalogEntry("pfp-section:$id", "TOOL", title, "Original PFP section", "pfp:category:$id", "pfp:features")
+        })
+    }
+
+    @Synchronized fun registerDocument(document: WorkspaceDocument, source: String) {
+        upsert(writableDatabase, CatalogEntry("file:${document.uri}", if (document.directory) "FOLDER" else "FILE",
+            document.name, document.mime, document.uri.toString(), source), System.currentTimeMillis())
+        changed()
+    }
+
+    @Synchronized fun attachIncoming(collection: Long, entries: List<CatalogEntry>) {
+        require(entries.size <= 33)
+        val db = writableDatabase
+        db.rawQuery("SELECT expression FROM collections WHERE id=?", arrayOf(collection.toString())).use { c ->
+            require(c.moveToFirst() && c.isNull(0)) { "Choose a manual space collection" }
+        }
+        db.beginTransaction()
+        try {
+            var position = 0
+            db.rawQuery("SELECT COALESCE(MAX(position),-1)+1 FROM memberships WHERE collection_id=?", arrayOf(collection.toString())).use { if (it.moveToFirst()) position = it.getInt(0) }
+            entries.forEach { entry ->
+                require(entry.kind == "FILE" && entry.source == "share" && Uri.parse(entry.target).scheme == "content")
+                upsert(db, entry, System.currentTimeMillis())
+                db.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key,position) VALUES(?,?,?)", arrayOf(collection, entry.key, position++))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed()
     }
 
     @Suppress("DEPRECATION")
@@ -771,6 +810,17 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             while (it.moveToNext()) result[it.getString(0)] = it.getInt(1)
         }
         return result
+    }
+
+    @Synchronized fun movedDocuments(mappings: List<Triple<Uri, Uri, Uri>>, documents: WorkspaceDocuments) {
+        val db = writableDatabase; db.beginTransaction()
+        try {
+            mappings.forEach { (before, after, parent) ->
+                if (get("file:$before") != null) renamedDocument(before.toString(), documents.stat(after), parent.toString())
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed()
     }
 
     private fun validateCustom(kind: String, title: String, target: String) {

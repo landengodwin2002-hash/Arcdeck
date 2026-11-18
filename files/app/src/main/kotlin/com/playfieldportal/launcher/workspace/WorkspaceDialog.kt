@@ -12,10 +12,10 @@ import androidx.compose.ui.window.DialogProperties
 @Composable
 internal fun WorkspaceDialog(
     onDismissRequest: () -> Unit,
+    title: @Composable () -> Unit,
+    text: @Composable () -> Unit,
     confirmButton: @Composable () -> Unit,
     dismissButton: (@Composable () -> Unit)? = null,
-    title: (@Composable () -> Unit)? = null,
-    text: (@Composable () -> Unit)? = null,
 ) {
     AlertDialog(onDismissRequest = onDismissRequest, confirmButton = confirmButton,
         dismissButton = dismissButton, title = title, text = text,

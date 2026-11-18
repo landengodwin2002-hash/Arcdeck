@@ -1,6 +1,22 @@
-# ArcDeck Workspace 1.0
+# ArcDeck Workspace 1.1
 
 An Android home launcher and windowed workspace built on PlayFieldPortal 1.3.3. Games, installed apps, approved storage folders, files, command shortcuts and system tools share one searchable library and organization system.
+
+## App spaces and Android integration
+
+Create a space for any installed app (including Discord, Brave, ChatGPT, file managers or video apps), or create an independent/game space. Each space connects an app with notes, links, folders and items from the shared catalog. An item can belong to multiple spaces without duplicating its tags or source. Spaces are ordinary editable collections in Library too.
+
+In **System → Enable floating workspace over other apps**, allow Android's display-over-other-apps permission. A movable **WS** bubble opens the selected space over another app. It provides notes, search, previews, file sharing, context copying and a route back to the full workspace. The panel runs only when enabled, has an ongoing notification with Stop, and does not inspect other apps' private content or messages.
+
+Use another app's Android **Share → Save to ArcDeck** action to choose a destination space. Temporary shared files are copied into ArcDeck's private storage so they remain accessible after the source app closes. Shares are reviewed before saving; outbound shares open Android's chooser or the connected app's composer. They never send a message automatically. File imports are bounded to 32 files, 512 MB per file and 1 GB per batch; connect a storage folder for larger files.
+
+Third-party apps run as Android activities. ArcDeck does not pretend to embed their full UI inside its own windows. **Open adjacent** requests Android's adjacent launch when the device is already in split-screen; Android and the target app control whether it is honored. The floating space remains available over ordinary full-screen apps that permit overlays.
+
+**PFP features** exposes the real original categories, library manager, notifications, player status, icons and layout/color editors. The permanent **PFP** dock action returns to the exact previous original screen. If an original dialog is active, finish/close it before switching sections; the workspace preserves it rather than discarding an edit.
+
+**Customize** controls palette, opacity, dimming, corners, text scale, dock order/visibility, compact controls and default window sizing. Named layout profiles save geometry and appearance. System can expose Android status/navigation bars, native Internet/volume panels, app information and launcher app shortcuts (shortcut access requires the default Home role).
+
+Files supports multi-selection, batch copy/cut/paste/share/delete, shared tags, breadcrumbs and name/size/type sorting. Images, text and PDFs preview inside the workspace. Approved folders refresh on return (throttled to five minutes); visible folders also refresh from provider change notifications. Backups include app spaces, notes, profiles and appearance, while Android permission grants, widget/app internals and shared-file bytes remain device-local.
 
 ## Editions
 

@@ -173,7 +173,7 @@ class UnifiedCatalogTest {
         prefs.edit().putString("notes", "Replacement").commit()
         WorkspaceBackup.restore(context, db, raw)
         assertEquals("Important notes", prefs.getString("notes", ""))
-        assertThrows(IllegalArgumentException::class.java) { WorkspaceBackup.readBounded(StringReader("a".repeat(5_000_001))) }
+        assertThrows(IllegalArgumentException::class.java) { WorkspaceBackup.readBounded(StringReader("a".repeat(WorkspaceBackup.MAX_CHARS + 1))) }
     }
     @Test fun malformedWorkspaceLayoutDoesNotOverwriteExistingNotesOrCatalog() {
         val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
