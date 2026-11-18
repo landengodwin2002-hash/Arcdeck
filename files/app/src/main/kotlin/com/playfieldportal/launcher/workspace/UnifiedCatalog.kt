@@ -237,9 +237,10 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             var position = 0
             db.rawQuery("SELECT COALESCE(MAX(position),-1)+1 FROM memberships WHERE collection_id=?", arrayOf(collection.toString())).use { if (it.moveToFirst()) position = it.getInt(0) }
             entries.forEach { entry ->
-                require(entry.kind == "FILE" && entry.source == "share" && Uri.parse(entry.target).scheme == "content")
+                if (entry.kind == "LINK" && entry.source == "user" && entry.key.startsWith("user:")) validateCustom("LINK", entry.title, entry.target)
+                else require(entry.kind == "FILE" && entry.source == "share" && Uri.parse(entry.target).scheme == "content")
                 upsert(db, entry, System.currentTimeMillis())
-                db.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key,position) VALUES(?,?,?)", arrayOf(collection, entry.key, position++))
+                db.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key,position) VALUES(?,?,?)", arrayOf<Any?>(collection, entry.key, position++))
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }

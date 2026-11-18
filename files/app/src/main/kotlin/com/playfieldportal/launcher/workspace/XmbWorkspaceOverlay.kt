@@ -16,6 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -356,6 +359,12 @@ fun XmbWorkspaceOverlay(
 
                         Column(
                             Modifier.zIndex(1f + panel.order)
+                                .pointerInput(panel.id) {
+                                    awaitEachGesture {
+                                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                        update(panel.id) { it.copy(order = topOrder++) }
+                                    }
+                                }
                                 .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
                                 .width(drawWidth).height(drawHeight)
                                 .clip(RoundedCornerShape(appearance.corners.dp))

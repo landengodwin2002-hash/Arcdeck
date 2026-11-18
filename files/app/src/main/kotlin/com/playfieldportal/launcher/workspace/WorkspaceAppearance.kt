@@ -16,13 +16,14 @@ import kotlin.math.roundToInt
 
 internal data class WorkspaceAppearance(val palette: String = "Ice", val opacity: Float = 0.95f, val dim: Float = 0.4f,
     val corners: Float = 15f, val font: Float = 1f, val compact: Boolean = false, val maximizePhone: Boolean = true,
-    val dockOrder: List<String> = emptyList(), val hidden: Set<String> = emptySet()) {
-    val accent get() = Color(when (palette) { "Violet" -> 0xFFCAA6FF; "Forest" -> 0xFF91DEB4; "Sunset" -> 0xFFFFBF8A; "Graphite" -> 0xFFD0D7E2; else -> 0xFF75BEFF })
+    val dockOrder: List<String> = emptyList(), val hidden: Set<String> = emptySet(), val customAccent: String = "") {
+    val accent get() = if (customAccent.matches(Regex("#[A-Fa-f0-9]{6}"))) Color(0xFF000000 or customAccent.drop(1).toLong(16))
+        else Color(when (palette) { "Violet" -> 0xFFCAA6FF; "Forest" -> 0xFF91DEB4; "Sunset" -> 0xFFFFBF8A; "Graphite" -> 0xFFD0D7E2; else -> 0xFF75BEFF })
     val ink get() = Color(when (palette) { "Violet" -> 0xFF241A3E; "Forest" -> 0xFF102D2A; "Sunset" -> 0xFF392325; "Graphite" -> 0xFF1F232B; else -> 0xFF11203D }).copy(alpha = opacity)
     val surface get() = Color(when (palette) { "Violet" -> 0xFF35284F; "Forest" -> 0xFF1B423B; "Sunset" -> 0xFF4F3334; "Graphite" -> 0xFF303640; else -> 0xFF1E3B60 }).copy(alpha = opacity)
     fun json(): String = JSONObject().put("palette", palette).put("opacity", (opacity * 1000).roundToInt() / 1000.0).put("dim", (dim * 1000).roundToInt() / 1000.0)
         .put("corners", (corners * 1000).roundToInt() / 1000.0).put("font", (font * 1000).roundToInt() / 1000.0).put("compact", compact).put("maximizePhone", maximizePhone)
-        .put("dockOrder", JSONArray(dockOrder)).put("hidden", JSONArray(hidden.toList())).toString()
+        .put("dockOrder", JSONArray(dockOrder)).put("hidden", JSONArray(hidden.toList())).put("customAccent", customAccent).toString()
     companion object {
         val palettes = listOf("Ice", "Violet", "Forest", "Sunset", "Graphite")
         fun parse(raw: String): WorkspaceAppearance {
@@ -35,9 +36,10 @@ internal data class WorkspaceAppearance(val palette: String = "Ice", val opacity
                 return (0 until a.length()).map { a.getString(it).also { n -> require(n.matches(Regex("[A-Z_]{1,24}"))) } }.distinct()
             }
             val palette = j.optString("palette", "Ice"); require(palette in palettes)
+            val custom = j.optString("customAccent"); require(custom.isEmpty() || custom.matches(Regex("#[A-Fa-f0-9]{6}")))
             return WorkspaceAppearance(palette, number("opacity", 0.95, 0.65..1.0), number("dim", 0.4, 0.0..0.8),
                 number("corners", 15.0, 0.0..28.0), number("font", 1.0, 0.85..1.35), j.optBoolean("compact"),
-                j.optBoolean("maximizePhone", true), names("dockOrder"), names("hidden").toSet())
+                j.optBoolean("maximizePhone", true), names("dockOrder"), names("hidden").filterNot { it in setOf("PFP", "CUSTOMIZE") }.toSet(), custom)
         }
     }
 }
@@ -94,10 +96,13 @@ internal object WorkspaceProfiles {
     val context = LocalContext.current; val prefs = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
     val style = rememberWorkspaceAppearance()
     var profileName by remember { mutableStateOf("") }; var revision by remember { mutableIntStateOf(0) }; var error by remember { mutableStateOf("") }
+    var customAccent by remember(style.customAccent) { mutableStateOf(style.customAccent) }
     fun change(value: WorkspaceAppearance) { prefs.edit().putString("appearance", value.json()).apply() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Make this workspace yours", style = MaterialTheme.typography.titleMedium)
-        WorkspaceAppearance.palettes.forEach { palette -> FilterChip(style.palette == palette, { change(style.copy(palette = palette)) }, label = { Text(palette) }) }
+        WorkspaceAppearance.palettes.forEach { palette -> FilterChip(style.palette == palette, { change(style.copy(palette = palette, customAccent = "")) }, label = { Text(palette) }) }
+        OutlinedTextField(customAccent, { value -> customAccent = value.take(7); if (value.isEmpty() || value.matches(Regex("#[A-Fa-f0-9]{6}"))) change(style.copy(customAccent = value)) },
+            label = { Text("Custom accent #RRGGBB") }, singleLine = true)
         Text("Window opacity"); Slider(style.opacity, { change(style.copy(opacity = it)) }, valueRange = 0.65f..1f)
         Text("Background dim"); Slider(style.dim, { change(style.copy(dim = it)) }, valueRange = 0f.. 0.8f)
         Text("Corner roundness"); Slider(style.corners, { change(style.copy(corners = it)) }, valueRange = 0f..28f)

@@ -63,8 +63,15 @@ internal object WorkspaceSharing {
         }
         try {
             if (payload.text.isNotBlank()) {
-                val file = File(batch, "shared-text.txt"); file.writeText(payload.text, Charsets.UTF_8)
-                total += file.length(); record(file, payload.subject.ifBlank { "Shared text" } + ".txt", "text/plain")
+                val value = payload.text.trim(); val url = Uri.parse(value)
+                if (value.length <= 2048 && value.none { it.isWhitespace() } && url.scheme in setOf("https", "http") && !url.host.isNullOrBlank()) {
+                    entries += CatalogEntry("user:${UUID.randomUUID()}", "LINK",
+                        payload.subject.takeIf { it.isNotBlank() && it != "Shared text" } ?: url.host!!,
+                        "Shared from Android", value, "user")
+                } else {
+                    val file = File(batch, "shared-text.txt"); file.writeText(payload.text, Charsets.UTF_8)
+                    total += file.length(); record(file, payload.subject.ifBlank { "Shared text" } + ".txt", "text/plain")
+                }
             }
             for ((index, uri) in payload.uris.withIndex()) {
                 currentCoroutineContext().ensureActive()
@@ -88,6 +95,7 @@ internal object WorkspaceSharing {
                 record(file, doc.name, doc.mime)
             }
             catalog.attachIncoming(WorkspaceSpaces.shared(context).collectionId(space, catalog), entries)
+            if (batch.listFiles()?.isEmpty() == true) batch.delete()
             return entries.size
         } catch (e: Throwable) { batch.deleteRecursively(); throw e }
     }

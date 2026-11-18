@@ -117,6 +117,35 @@ class WorkspaceSpacesTest {
         assertEquals(WorkspacePreview.TEXT_LIMIT, result.first.length); assertTrue(result.second)
         assertEquals("small" to false, WorkspacePreview.readText(StringReader("small")))
     }
+    @Test fun sharedWebLinksBecomePortableLinksRatherThanTemporaryFiles() = runBlocking {
+        val space = spaces.create("Brave", "com.brave.browser", catalog)
+        WorkspaceSharing.import(context, catalog, space, IncomingShare("https://example.com/article", "Article", emptyList()))
+        val entry = spaces.items(space, catalog).single()
+        assertEquals("LINK", entry.kind); assertEquals("user", entry.source); assertEquals("https://example.com/article", entry.target)
+        assertTrue(JSONObject(catalog.exportUserLayer()).getJSONArray("custom_records").toString().contains("https://example.com/article"))
+    }
+    @Test fun appearanceSliderEndpointsAndDraftContextRoundTrip() {
+        val style = WorkspaceAppearance(opacity = 0.65f, dim = 0.8f, font = 1.35f)
+        assertEquals(style, WorkspaceAppearance.parse(style.json()))
+        val space = spaces.create("Notes", "", catalog); spaces.draft(space.id, "Before debounce")
+        assertEquals("Before debounce", spaces.noteText(space))
+        val backup = JSONObject(WorkspaceBackup.export(context, catalog))
+        assertTrue(backup.getJSONObject("preferences").getString("spaces").contains("Before debounce"))
+    }
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test fun permittedFloatingBubbleOpensAComposePanelWithoutAnActivity() {
+        org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(true)
+        val controller = Robolectric.buildService(WorkspaceOverlayService::class.java).create()
+        try {
+            val service = controller.get(); service.onStartCommand(Intent(), 0, 1)
+            val bubble = WorkspaceOverlayService::class.java.getDeclaredField("bubble").apply { isAccessible = true }.get(service) as android.view.View
+            assertTrue(bubble.performClick())
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            val panel = WorkspaceOverlayService::class.java.getDeclaredField("panel").apply { isAccessible = true }.get(service)
+            assertNotNull(panel)
+            assertTrue(bubble.performClick())
+        } finally { controller.destroy(); org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(false) }
+    }
     @Test fun floatingServiceProvidesComposeLifecycleAndStopsWithoutOverlayPermission() {
         val controller = Robolectric.buildService(WorkspaceOverlayService::class.java).create()
         val service = controller.get()

@@ -87,6 +87,23 @@ class WorkspaceDocumentsTest {
         }
         assertEquals(1, provider.nodes.size)
     }
+    @Test fun movingATaggedFilePreservesItsOrganizationAtTheNewUri() = runBlocking {
+        context.deleteDatabase("arcdeck_unified_v1.db")
+        val catalog = UnifiedCatalog(context)
+        try {
+            val id = provider.createDocument("root", "text/plain", "organized.txt")
+            provider.nodes.getValue(id).file.writeText("Move this")
+            val folder = provider.createDocument("root", DocumentsContract.Document.MIME_TYPE_DIR, "Destination")
+            val source = documents.stat(DocumentsContract.buildDocumentUriUsingTree(root, id))
+            val target = DocumentsContract.buildDocumentUriUsingTree(root, folder)
+            catalog.registerDocument(source, "saf:$root"); catalog.addTag("file:${source.uri}", "keep")
+            val collection = catalog.createCollection("Organized"); catalog.addToCollection(collection, "file:${source.uri}")
+            documents.copy(source, target, true, onMoved = { catalog.movedDocuments(it, documents) }) {}
+            val moved = documents.children(target).items.single()
+            assertNull(catalog.get("file:${source.uri}")); assertEquals(listOf("keep"), catalog.tags("file:${moved.uri}"))
+            assertEquals("file:${moved.uri}", catalog.search("in:$collection").single().key)
+        } finally { catalog.close() }
+    }
 }
 
 class FixtureDocumentsProvider : DocumentsProvider() {
