@@ -8,6 +8,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
 internal fun WorkspaceNotesPane() {
@@ -17,12 +20,15 @@ internal fun WorkspaceNotesPane() {
     var pending by remember { mutableStateOf<String?>(null) }
     fun save() { pending?.let { prefs.edit().putString("notes", it).apply() }; pending = null }
     LaunchedEffect(text) { if (pending != null) { delay(500); save() } }
-    DisposableEffect(Unit) {
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_PAUSE) save() }
+        owner.lifecycle.addObserver(observer)
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == "restore_epoch") { pending = null; text = prefs.getString("notes", "") ?: "" }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
-        onDispose { pending?.let { prefs.edit().putString("notes", it).apply() }; prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+        onDispose { pending?.let { prefs.edit().putString("notes", it).apply() }; prefs.unregisterOnSharedPreferenceChangeListener(listener); owner.lifecycle.removeObserver(observer) }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedTextField(text, { if (it.length <= 500000) { text = it; pending = it } }, label = { Text("Workspace notes") },

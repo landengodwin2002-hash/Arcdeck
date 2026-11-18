@@ -113,6 +113,7 @@ def plan_install(repo):
             '        <receiver android:name="com.playfieldportal.launcher.workspace.WorkspaceTermuxReceiver" android:exported="false" />\n    </application>')], manifest)
     import re
     text = re.sub(r'android:(icon|roundIcon)="[^"]+"', r'android:\1="@mipmap/arcdeck_launcher"', text)
+    text = text.replace('android:screenOrientation="sensorLandscape"', 'android:screenOrientation="fullSensor"')
     result[manifest] = text
     text = gradle.read_text(encoding="utf-8-sig")
     for dep in ('libs.androidx.documentfile', 'libs.coil.compose'):
@@ -133,12 +134,17 @@ def plan_install(repo):
     }
     buildFeatures {
 ''')], gradle)
+    text = text.replace('    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n        targetSdk = 36\n    }',
+        '    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n    }')
     result[gradle] = text
     sources = base / 'files/app/src/main/kotlin/com/playfieldportal/launcher/workspace'
     required = {'XmbWorkspaceOverlay.kt', 'UnifiedCatalog.kt', 'UnifiedQuery.kt', 'UnifiedLibraryPane.kt',
                 'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
+    orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'
+    if orientation.is_file():
+        result[orientation] = orientation.read_text().replace('?: LANDSCAPE', '?: FOLLOW_DEVICE')
     for path in sorted(sources.glob('*.kt')):
         result[repo / 'app/src/main/kotlin/com/playfieldportal/launcher/workspace' / path.name] = path.read_text()
     for path in sorted((base/'tests/android').glob('*.kt')):
@@ -147,7 +153,7 @@ def plan_install(repo):
         if path.is_file(): result[repo/'app/src/main/res'/path.relative_to(base/'files/app/src/main/res')] = path.read_text()
     for path in sorted((base/'tests/fixtures').glob('*')):
         if path.is_file(): result[repo/'app/src/test/resources'/path.name] = path.read_text()
-    return result, {activity, manifest, gradle}
+    return result, {activity, manifest, gradle, orientation}
 
 
 def atomic_write(path, data):

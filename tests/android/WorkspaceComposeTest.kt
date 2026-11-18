@@ -52,6 +52,16 @@ class WorkspaceComposeTest {
         waitFor("My website")
         assertEquals("My website", catalog.search("website").single().alias)
     }
+    @Test fun searchStateSurvivesClosingAndReopeningTheWorkspace() {
+        val expanded = androidx.compose.runtime.mutableStateOf(true)
+        compose.setContent { XmbWorkspaceOverlay(expanded.value, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithText("Search games, apps, files and tools").performTextInput("kept query")
+        compose.runOnIdle { expanded.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { expanded.value = true }
+        compose.waitForIdle()
+        compose.onNodeWithText("Search games, apps, files and tools").assertTextContains("kept query")
+    }
     @Test fun notesSaveWhenTheirWindowClosesBeforeTheDebounce() {
         val shown = androidx.compose.runtime.mutableStateOf(true)
         compose.setContent { MaterialTheme { if (shown.value) WorkspaceNotesPane() } }

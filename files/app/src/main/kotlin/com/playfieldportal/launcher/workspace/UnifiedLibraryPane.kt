@@ -18,12 +18,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,9 +53,10 @@ internal fun UnifiedLibraryPane(
     initialQuery: String = "",
 ) {
     val context = LocalContext.current
+    val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val revision by catalog.revision.collectAsState()
-    var query by remember { mutableStateOf(initialQuery) }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
     var page by remember(query, revision, sourceRevision) { mutableIntStateOf(0) }
     var results by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     var collections by remember { mutableStateOf<List<CatalogCollection>>(emptyList()) }
@@ -63,7 +66,7 @@ internal fun UnifiedLibraryPane(
     var busy by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf("") }
     var queryError by remember { mutableStateOf("") }
-    var showCollections by remember { mutableStateOf(initiallyCollections) }
+    var showCollections by rememberSaveable { mutableStateOf(initiallyCollections) }
     var selected by remember { mutableStateOf<CatalogEntry?>(null) }
     var collectionEditor by remember { mutableStateOf<CatalogCollection?>(null) }
     var newShortcut by remember { mutableStateOf(false) }
@@ -157,7 +160,7 @@ internal fun UnifiedLibraryPane(
                     onClick = { query = filter; showCollections = false }, label = { Text(label) }) }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            TextButton(onClick = { showCollections = !showCollections }) { Text(if (showCollections) "Search" else "Collections & storage") }
+            TextButton(onClick = { focus.clearFocus(); showCollections = !showCollections }) { Text(if (showCollections) "Search" else "Collections & storage") }
             TextButton(enabled = !busy, onClick = { pickRoot.launch(null) }) { Text("Add folder") }
             TextButton(enabled = !busy, onClick = { newShortcut = true }) { Text("Add shortcut") }
             TextButton(onClick = { collectionEditor = CatalogCollection(0, "", query.takeIf { it.isNotBlank() }) }) { Text("Save collection") }
@@ -223,7 +226,7 @@ internal fun UnifiedLibraryPane(
                                     style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
-                        TextButton(enabled = !busy, onClick = { selected = entry }) { Text("⋮") }
+                        TextButton(enabled = !busy, onClick = { focus.clearFocus(); selected = entry }) { Text("⋮") }
                     }
                 }
                 if (results.isEmpty() && !loading) item {

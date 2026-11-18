@@ -16,6 +16,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,7 +51,7 @@ internal class WorkspaceDocuments(private val context: Context) {
         requireNotNull(document.authority), DocumentsContract.getTreeDocumentId(document))
 
     fun stat(uri: Uri): WorkspaceDocument {
-        val cursor = resolver.query(uri, columns, null, null, null) ?: error("Folder or file provider is unavailable")
+        val cursor = resolver.query(uri, columns, android.os.Bundle.EMPTY, null) ?: error("Folder or file provider is unavailable")
         return cursor.use {
             check(it.moveToFirst()) { "File or folder no longer exists" }
             WorkspaceDocument(uri, it.getString(1) ?: "Unnamed", it.getString(2) ?: "application/octet-stream",
@@ -59,7 +62,7 @@ internal class WorkspaceDocuments(private val context: Context) {
     fun children(folder: Uri, limit: Int = 2000): DocumentListing {
         val uri = DocumentsContract.buildChildDocumentsUriUsingTree(folder, DocumentsContract.getDocumentId(folder))
         val out = mutableListOf<WorkspaceDocument>()
-        val cursor = resolver.query(uri, columns, null, null, null) ?: error("Cannot read folder; reconnect its permission")
+        val cursor = resolver.query(uri, columns, android.os.Bundle.EMPTY, null) ?: error("Cannot read folder; reconnect its permission")
         var truncated = false
         cursor.use {
             while (it.moveToNext()) {
@@ -179,11 +182,12 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
     val documents = remember { WorkspaceDocuments(context) }
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
-    val history = remember { mutableStateListOf<String>() }
-    var current by remember { mutableStateOf(location ?: prefs.getString("file_location", null)) }
+    val history = rememberSaveable(saver = listSaver<SnapshotStateList<String>, String>(
+        save = { it.toList() }, restore = { it.toMutableStateList() })) { mutableStateListOf<String>() }
+    var current by rememberSaveable { mutableStateOf(location ?: prefs.getString("file_location", null)) }
     var listing by remember { mutableStateOf(DocumentListing(emptyList(), false)) }
     var title by remember { mutableStateOf("Choose a folder") }
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var revision by remember { mutableIntStateOf(0) }

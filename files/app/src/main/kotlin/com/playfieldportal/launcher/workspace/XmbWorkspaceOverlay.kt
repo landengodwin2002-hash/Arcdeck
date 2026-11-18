@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -178,6 +179,7 @@ fun XmbWorkspaceOverlay(
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
+    val paneState = rememberSaveableStateHolder()
     val panels = remember { mutableStateListOf<Panel>().apply {
         val saved = loadPanels(context)
         val firstLaunch = !context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).contains("panels")
@@ -197,7 +199,10 @@ fun XmbWorkspaceOverlay(
     val lifecycleOwner = LocalLifecycleOwner.current
     var resumeRevision by remember { mutableStateOf(0) }
     DisposableEffect(lifecycleOwner, catalog) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumeRevision++ }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumeRevision++
+            if (event == Lifecycle.Event.ON_PAUSE) savePanels(context, panels.toList())
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -301,8 +306,9 @@ fun XmbWorkspaceOverlay(
                         .padding(horizontal = 9.dp, vertical = 7.dp), color = Ice)
                 }
 
+                val active = panels.filterNot { it.minimized }.maxByOrNull { it.order }
                 panels.sortedBy { it.order }.forEach { panel ->
-                    if (!panel.minimized) {
+                    if (!panel.minimized && (active?.maximized != true || active?.id == panel.id)) {
                         val widthDp = min(panel.widthDp, viewportWidth - 18f)
                             .coerceAtLeast(220f)
                         val heightDp = min(panel.heightDp, viewportHeight - 110f)
@@ -349,10 +355,12 @@ fun XmbWorkspaceOverlay(
                                 }
                                 FrameControl("×") {
                                     panels.removeAll { it.id == panel.id }
+                                    paneState.removeState(panel.id)
                                     onSound(MenuSound.BACK)
                                 }
                             }
                             Box(Modifier.weight(1f).fillMaxWidth().padding(8.dp)) {
+                                paneState.SaveableStateProvider(panel.id) {
                                 when (panel.tool) {
                                     Tool.SEARCH, Tool.LIBRARY, Tool.COLLECTIONS -> UnifiedLibraryPane(
                                         catalog = catalog,
@@ -386,6 +394,7 @@ fun XmbWorkspaceOverlay(
                                         panels.add(Panel(nextId++, Tool.SEARCH, 12f, 64f, maximized = configuration.screenWidthDp < 600))
                                     }
                                 }
+                            }
                             }
                             if (!panel.maximized) {
                                 Box(
@@ -451,7 +460,13 @@ private fun SystemTool(onClose: () -> Unit, onReset: () -> Unit) {
         ListAction("▣  File manager") { openSystem(context, Settings.ACTION_INTERNAL_STORAGE_SETTINGS) }
         ListAction("▤  Wi-Fi settings") { openSystem(context, Settings.ACTION_WIFI_SETTINGS) }
         ListAction("◉  Bluetooth settings") { openSystem(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
-        ListAction("⌨  Workspace shortcut: ${android.view.KeyEvent.keyCodeToString(shortcut).removePrefix("KEYCODE_")}") { editShortcut = true }
+        ListAction("⌨  Workspace shortcut: ${when (shortcut) {
+            android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> "Select"
+            android.view.KeyEvent.KEYCODE_BUTTON_START -> "Start"
+            android.view.KeyEvent.KEYCODE_BUTTON_THUMBL -> "L3"
+            android.view.KeyEvent.KEYCODE_BUTTON_THUMBR -> "R3"
+            else -> "F10"
+        }}") { editShortcut = true }
         ListAction("▣  Landscape reminder: ${if (landscape) "on" else "off"}") {
             landscape = !landscape; preferences.edit().putBoolean("landscape_prompt", landscape).apply()
         }
