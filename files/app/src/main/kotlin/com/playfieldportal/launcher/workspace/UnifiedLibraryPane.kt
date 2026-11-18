@@ -1,39 +1,42 @@
 package com.playfieldportal.launcher.workspace
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** One search surface for all entities and relationships; rendered inside the existing XMB workspace. */
+private data class LibrarySnapshot(val entries: List<CatalogEntry>, val collections: List<CatalogCollection>,
+    val roots: List<CatalogRoot>, val errors: List<String>)
+
 @Composable
 internal fun UnifiedLibraryPane(
     catalog: UnifiedCatalog,
@@ -44,304 +47,314 @@ internal fun UnifiedLibraryPane(
     onSetPfpFavorite: (Long, Boolean) -> Unit,
     onRunCommand: (String) -> Unit,
     onOpenWorkspaceTool: (String) -> Unit,
+    onBrowseFolder: (String) -> Unit,
+    initialQuery: String = "",
 ) {
     val context = LocalContext.current
-    var revision by remember { mutableStateOf(0) }
-    var query by remember { mutableStateOf("") }
-    var page by remember { mutableStateOf(0) }
-    var hasMore by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val revision by catalog.revision.collectAsState()
+    var query by remember { mutableStateOf(initialQuery) }
+    var page by remember(query, revision, sourceRevision) { mutableIntStateOf(0) }
     var results by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     var collections by remember { mutableStateOf<List<CatalogCollection>>(emptyList()) }
     var roots by remember { mutableStateOf<List<CatalogRoot>>(emptyList()) }
-    var selected by remember { mutableStateOf<CatalogEntry?>(null) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf("") }
+    var queryError by remember { mutableStateOf("") }
     var showCollections by remember { mutableStateOf(initiallyCollections) }
-    var showNewCollection by remember { mutableStateOf(false) }
-    var showNewShortcut by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("") }
-    var scanRequest by remember { mutableStateOf<String?>(null) }
-    var backupWriteUri by remember { mutableStateOf<Uri?>(null) }
-    var backupReadUri by remember { mutableStateOf<Uri?>(null) }
+    var selected by remember { mutableStateOf<CatalogEntry?>(null) }
+    var collectionEditor by remember { mutableStateOf<CatalogCollection?>(null) }
+    var newShortcut by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var restoreUri by remember { mutableStateOf<Uri?>(null) }
 
-    LaunchedEffect(query, revision, sourceRevision) { page = 0 }
+    fun work(block: suspend () -> String) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            workspaceResult { block() }.onSuccess { notice = it }.onFailure { notice = it.message ?: "Operation failed" }
+            busy = false
+        }
+    }
+    fun mutate(message: String = "Saved", block: () -> Unit) = work {
+        withContext(Dispatchers.IO) { block() }; message
+    }
     LaunchedEffect(query, revision, sourceRevision, page) {
-        delay(130)
-        val snapshot = withContext(Dispatchers.IO) {
-            Triple(catalog.search(query, limit = 100, offset = page * 100),
-                catalog.collections(), catalog.roots())
-        }
-        results = if (page == 0) snapshot.first else (results + snapshot.first).distinctBy { it.key }
-        hasMore = snapshot.first.size == 100
-        collections = snapshot.second
-        roots = snapshot.third
+        loading = true
+        delay(120)
+        workspaceResult { withContext(Dispatchers.IO) {
+            val errors = catalog.queryErrors(query)
+            val found = if (errors.isEmpty()) catalog.search(query, 101, page * 100) else emptyList()
+            LibrarySnapshot(found, catalog.collections(), catalog.roots(), errors)
+        } }.onSuccess { snapshot ->
+            val found = snapshot.entries
+            val cols = snapshot.collections
+            val folders = snapshot.roots
+            val errors = snapshot.errors
+            results = if (page == 0) found.take(100) else (results + found.take(100)).distinctBy { it.key }
+            collections = cols; roots = folders; queryError = errors.joinToString(" · ")
+            hasMore = found.size > 100
+        }.onFailure { queryError = it.message ?: "Search unavailable" }
+        loading = false
     }
-
-    LaunchedEffect(scanRequest) {
-        val request = scanRequest ?: return@LaunchedEffect
-        status = runCatching { withContext(Dispatchers.IO) { catalog.scanRoot(Uri.parse(request)) } }
-            .fold(onSuccess = { it.status }, onFailure = { "Scan failed; index retained: ${it.message}" })
-        scanRequest = null
-        revision++
-    }
-
-    LaunchedEffect(backupWriteUri) {
-        val uri = backupWriteUri ?: return@LaunchedEffect
-        status = runCatching {
-            withContext(Dispatchers.IO) {
-                val data = catalog.exportUserLayer()
-                context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(data) }
-                    ?: error("Cannot open backup destination")
-            }
-            "Organization backup exported. Keep it private if it contains command shortcuts."
-        }.getOrElse { "Backup failed: ${it.message}" }
-        backupWriteUri = null
-    }
-    LaunchedEffect(backupReadUri) {
-        val uri = backupReadUri ?: return@LaunchedEffect
-        status = runCatching {
-            withContext(Dispatchers.IO) {
-                val data = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
-                    reader.readText().also { require(it.length <= 5_000_000) { "Backup is too large" } }
-                } ?: error("Cannot read backup")
-                catalog.importUserLayer(data)
-            }
-            revision++
-            "Organization backup restored; relink any file roots on this device."
-        }.getOrElse { "Restore failed: ${it.message}" }
-        backupReadUri = null
-    }
-    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) {
-        backupWriteUri = it
-    }
-    val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
-        backupReadUri = it
-    }
-
-    val pickRoot = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }.onFailure { status = "Folder permission denied: ${it.message}" }
-            runCatching { catalog.addRoot(uri, uri.lastPathSegment ?: "Selected folder") }
-                .onFailure { status = "Cannot register folder: ${it.message}" }
-            revision++
-        }
-    }
-
-    fun open(entry: CatalogEntry) {
-        catalog.markOpened(entry.key)
+    fun open(entry: CatalogEntry) = work {
+        require(!entry.missing) { "Source is unavailable. Reconnect its app, game library or storage folder." }
         when (entry.kind) {
-            "GAME", "SHORTCUT" -> entry.target.toLongOrNull()?.let(onOpenPfpGame)
-            "APP" -> runCatching {
-                context.packageManager.getLaunchIntentForPackage(entry.target)?.let(context::startActivity)
-                    ?: error("App not installed")
-            }.onFailure { status = "App unavailable: ${it.message}" }
-            "FILE" -> runCatching {
-                val knownGameId = catalog.gameIdForFile(entry.target)
-                if (knownGameId != null) {
-                    onOpenPfpGame(knownGameId)
-                    return@runCatching
-                }
-                val uri = Uri.parse(entry.target)
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
+            "GAME", "SHORTCUT" -> {
+                val id = entry.target.toLongOrNull() ?: error("Game reference is unavailable")
+                withContext(Dispatchers.IO) { catalog.markOpened(entry.key) }
+                onOpenPfpGame(id)
+            }
+            "APP" -> {
+                val intent = context.packageManager.getLaunchIntentForPackage(entry.target) ?: error("App is no longer installed")
+                withContext(Dispatchers.IO) { catalog.markOpened(entry.key) }
                 context.startActivity(intent)
-            }.onFailure { status = "Cannot open file: ${it.message}" }
-            "FOLDER" -> status = "Folder indexed. Use Files to browse this folder and its children."
-            "COMMAND" -> onRunCommand(entry.target) // Confirmation is in the existing Terminal panel.
-            "LINK" -> runCatching {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.target)))
-            }.onFailure { status = "Cannot open link: ${it.message}" }
-            "TOOL" -> runCatching {
-                if (entry.target.startsWith("arcdeck:")) {
-                    onOpenWorkspaceTool(entry.target.removePrefix("arcdeck:"))
-                    return@runCatching
+            }
+            "FOLDER" -> { onBrowseFolder(entry.target) }
+            "FILE" -> {
+                val game = withContext(Dispatchers.IO) { catalog.gameIdForFile(entry.target) }
+                if (game != null) onOpenPfpGame(game)
+                else {
+                    val document = withContext(Dispatchers.IO) { WorkspaceDocuments(context).stat(Uri.parse(entry.target)) }
+                    openWorkspaceDocument(context, document)
                 }
-                context.startActivity(Intent(entry.target))
-            }.onFailure { status = "Cannot open settings: ${it.message}" }
+            }
+            "COMMAND" -> onRunCommand(entry.target)
+            "LINK" -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.target)))
+            "TOOL" -> if (entry.target.startsWith("arcdeck:")) onOpenWorkspaceTool(entry.target.removePrefix("arcdeck:"))
+                else context.startActivity(Intent(entry.target))
         }
-        revision++
+        ""
     }
-
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        OutlinedTextField(value = query, onValueChange = { query = it },
-            label = { Text("Search EVERYTHING · type:game tag:rpg sort:recent") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            TextButton(onClick = { showCollections = !showCollections }) {
-                Text(if (showCollections) "Search results" else "Collections")
-            }
-            TextButton(onClick = { pickRoot.launch(null) }) { Text("+ Folder") }
-            TextButton(onClick = { showNewShortcut = true }) { Text("+ Shortcut") }
-            TextButton(onClick = { revision++ }) { Text("Refresh") }
+    BackHandler(enabled = showCollections) { showCollections = false }
+    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) work { withContext(Dispatchers.IO) {
+            val data = WorkspaceBackup.export(context, catalog)
+            (context.contentResolver.openOutputStream(uri, "wt") ?: error("Cannot write backup"))
+                .bufferedWriter().use { it.write(data) }
+            "Backup saved: organization, notes and window layout"
+        } }
+    }
+    val restore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { restoreUri = it }
+    val pickRoot = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) work { withContext(Dispatchers.IO) {
+            val documents = WorkspaceDocuments(context)
+            documents.grant(uri)
+            catalog.addRoot(uri, documents.stat(documents.rootDocument(uri)).name)
+            catalog.scanRoot(uri).status
+        } }
+    }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(query, { if (it.length <= 512) query = it }, label = { Text("Search games, apps, files and tools") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true, isError = queryError.isNotBlank(),
+            trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("Clear") } })
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            listOf("All" to "", "Games" to "type:game", "Apps" to "type:app", "Files" to "source:files",
+                "Favorites" to "is:favorite", "Pinned" to "is:pinned", "Recent" to "sort:recent", "Missing" to "is:missing")
+                .forEach { (label, filter) -> FilterChip(selected = query == filter && !showCollections,
+                    onClick = { query = filter; showCollections = false }, label = { Text(label) }) }
         }
-        if (status.isNotBlank()) Text(status, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (sourceError != null) Text(sourceError, maxLines = 2, overflow = TextOverflow.Ellipsis)
-
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            TextButton(onClick = { showCollections = !showCollections }) { Text(if (showCollections) "Search" else "Collections & storage") }
+            TextButton(enabled = !busy, onClick = { pickRoot.launch(null) }) { Text("Add folder") }
+            TextButton(enabled = !busy, onClick = { newShortcut = true }) { Text("Add shortcut") }
+            TextButton(onClick = { collectionEditor = CatalogCollection(0, "", query.takeIf { it.isNotBlank() }) }) { Text("Save collection") }
+            TextButton(enabled = !busy, onClick = { mutate("Apps refreshed") { catalog.syncAndroidApps(); catalog.syncSystemTools() } }) { Text("Refresh apps") }
+        }
+        if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (queryError.isNotBlank()) Text(queryError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        if (notice.isNotBlank()) Row(Modifier.fillMaxWidth()) {
+            Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 3)
+            TextButton(onClick = { notice = "" }) { Text("×") }
+        }
+        if (sourceError != null) Text(sourceError, style = MaterialTheme.typography.bodySmall)
         if (showCollections) {
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                TextButton(onClick = { showNewCollection = true }) { Text("+ Collection") }
-                TextButton(onClick = { export.launch("arcdeck-organization.json") }) { Text("Backup") }
-                TextButton(onClick = { import.launch(arrayOf("application/json", "text/plain")) }) {
-                    Text("Restore")
-                }
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                TextButton(enabled = !busy, onClick = { collectionEditor = CatalogCollection(0, "", null) }) { Text("New collection") }
+                TextButton(enabled = !busy, onClick = { export.launch("ArcDeck-backup.json") }) { Text("Backup") }
+                TextButton(enabled = !busy, onClick = { restore.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) { Text("Restore") }
+                TextButton(enabled = !busy && roots.isNotEmpty(), onClick = { work {
+                    withContext(Dispatchers.IO) { roots.forEach { catalog.scanRoot(Uri.parse(it.uri)) } }
+                    "Storage scan complete"
+                } }) { Text("Scan all folders") }
             }
-            LazyColumn {
-                items(collections, key = { it.id }) { collection ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            "▤ ${collection.name} ${if (collection.expression != null) "◇" else ""}",
-                            modifier = Modifier.weight(1f).clickable {
-                                query = if (collection.expression != null) collection.expression
-                                    else "in:${collection.id} sort:manual"
-                                showCollections = false
-                            }.padding(6.dp), maxLines = 1,
-                        )
-                        TextButton(onClick = {
-                            catalog.deleteCollection(collection.id); revision++
-                        }) { Text("Delete") }
+            LazyColumn(Modifier.weight(1f)) {
+                item { Text("Collections", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp)) }
+                if (collections.isEmpty()) item { Text("Create a manual collection or save a search that updates automatically.", Modifier.padding(8.dp)) }
+                items(collections, key = { "collection:${it.id}" }) { col ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).clickable { query = "in:${col.id}" + if (col.expression == null) " sort:manual" else ""; showCollections = false }.padding(8.dp)) {
+                            Text((if (col.expression != null) "◇  " else "▤  ") + col.name)
+                            if (col.expression != null) Text(col.expression, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
+                        TextButton(onClick = { collectionEditor = col }) { Text("Edit") }
                     }
                 }
-                items(roots, key = { it.uri }) { root ->
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        Text("▣ ${root.label} (${root.status})", modifier = Modifier.weight(1f), maxLines = 2)
-                        TextButton(onClick = {
-                            // Scans run in coroutine below; no synchronous document traversal on UI thread.
-                            status = "Indexing ${root.label}…"
-                            scanRequest = root.uri
-                        }) { Text("Scan") }
+                item { Text("Indexed folders", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp)) }
+                if (roots.isEmpty()) item { Text("Add a folder to index files and ROMs in universal search.", Modifier.padding(8.dp)) }
+                items(roots, key = { "root:${it.uri}" }) { root ->
+                    Column(Modifier.fillMaxWidth().padding(8.dp)) {
+                        Text(root.label, fontWeight = FontWeight.Medium)
+                        Text(root.status, style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            TextButton(onClick = { onBrowseFolder(WorkspaceDocuments(context).rootDocument(Uri.parse(root.uri)).toString()) }) { Text("Browse") }
+                            TextButton(enabled = !busy, onClick = { work { withContext(Dispatchers.IO) { catalog.scanRoot(Uri.parse(root.uri)).status } } }) { Text("Scan") }
+                            TextButton(enabled = !busy, onClick = { confirm = "Remove ${root.label} from the index? Files remain in storage." to {
+                                mutate("Folder removed from index") { catalog.removeRoot(root.uri) }
+                            } }) { Text("Remove") }
+                        }
                     }
                 }
             }
         } else {
-            Text("${results.size} result(s) · Game/App/File/Folder/Command/Link", fontWeight = FontWeight.Medium)
-            LazyColumn {
+            Text("${results.size}${if (hasMore) "+" else ""} results", style = MaterialTheme.typography.labelSmall)
+            LazyColumn(Modifier.weight(1f)) {
                 items(results, key = { it.key }) { entry ->
-                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                        Text(
-                            "${entry.kind.take(3)}   ${entry.alias ?: entry.title}${if (entry.favorite) " ★" else ""}" +
-                                if (entry.missing) "  [missing]" else "",
-                            modifier = Modifier.weight(1f).clickable { open(entry) }.padding(7.dp),
-                            maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        )
-                        TextButton(onClick = { selected = entry }) { Text("⋮") }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.weight(1f).clickable(enabled = !busy) { open(entry) }.padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            CatalogArtwork(entry)
+                            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                                Text((entry.alias ?: entry.title) + (if (entry.favorite) " ★" else "") + (if (entry.pinned) " · pinned" else ""),
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text("${entry.kind.lowercase()} · ${if (entry.missing) "source missing" else entry.subtitle.ifBlank { entry.source }}",
+                                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        TextButton(enabled = !busy, onClick = { selected = entry }) { Text("⋮") }
                     }
                 }
-                item {
-                    if (hasMore) TextButton(onClick = { page++ }) {
-                        Text("Load more results")
-                    }
+                if (results.isEmpty() && !loading) item {
+                    Text(if (query.isBlank()) "Connect a game library or add a storage folder to begin." else "No matching items. Change the filters or scan a folder.", Modifier.padding(10.dp))
                 }
+                if (hasMore) item { TextButton(enabled = !loading && !busy, onClick = { page++ }) { Text("Load more") } }
             }
         }
     }
-    if (selected != null) {
-        val entry = selected!!
+    selected?.takeIf { confirm == null }?.let { entry ->
         var alias by remember(entry.key) { mutableStateOf(entry.alias ?: "") }
+        var title by remember(entry.key) { mutableStateOf(entry.title) }
+        var target by remember(entry.key) { mutableStateOf(entry.target) }
         var tag by remember(entry.key) { mutableStateOf("") }
-        var localTags by remember(entry.key, revision) { mutableStateOf(catalog.tags(entry.key)) }
-        AlertDialog(onDismissRequest = { selected = null }, title = { Text(entry.title) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("${entry.kind} · ${entry.source}")
-                    OutlinedTextField(alias, { alias = it }, label = { Text("Custom display name") })
-                    Row {
-                        TextButton(onClick = { catalog.rename(entry.key, alias); revision++ }) { Text("Rename") }
-                        TextButton(onClick = {
-                            if (entry.kind == "GAME" || entry.kind == "SHORTCUT") {
-                                entry.target.toLongOrNull()?.let { onSetPfpFavorite(it, !entry.favorite) }
-                            } else catalog.setFavorite(entry.key, !entry.favorite)
-                            revision++; selected=null
-                        }) {
-                            Text(if (entry.favorite) "Unfavorite" else "Favorite")
-                        }
-                        TextButton(onClick = { catalog.setPinned(entry.key, !entry.pinned); revision++; selected=null }) {
-                            Text(if (entry.pinned) "Unpin" else "Pin")
-                        }
+        var tags by remember(entry.key) { mutableStateOf<List<String>>(emptyList()) }
+        var collectionFilter by remember(entry.key) { mutableStateOf("") }
+        LaunchedEffect(entry.key, revision) { tags = withContext(Dispatchers.IO) { catalog.tags(entry.key) } }
+        AlertDialog(onDismissRequest = { selected = null }, title = { Text(entry.title, maxLines = 2) }, text = {
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${entry.kind.lowercase()} · ${entry.source}", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(alias, { alias = it.take(120) }, label = { Text("Display alias") }, singleLine = true)
+                TextButton(enabled = !busy, onClick = { mutate { catalog.rename(entry.key, alias) } }) { Text("Save display alias") }
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    TextButton(enabled = !busy, onClick = {
+                        if (entry.kind in setOf("GAME", "SHORTCUT")) {
+                            entry.target.toLongOrNull()?.let { onSetPfpFavorite(it, !entry.favorite) }
+                        } else mutate { catalog.setFavorite(entry.key, !entry.favorite) }
+                        selected = null
+                    }) { Text(if (entry.favorite) "Unfavorite" else "Favorite") }
+                    TextButton(enabled = !busy, onClick = { mutate { catalog.setPinned(entry.key, !entry.pinned) }; selected = null }) {
+                        Text(if (entry.pinned) "Unpin" else "Pin")
                     }
-                    Text("Tags: ${localTags.joinToString(", ")}")
-                    localTags.forEach { t ->
-                        TextButton(onClick = { catalog.removeTag(entry.key, t); revision++ }) {
-                            Text("Remove tag: $t")
-                        }
-                    }
-                    Row {
-                        OutlinedTextField(tag, { tag = it }, label = { Text("Tag") },
-                            modifier = Modifier.weight(1f), singleLine = true)
-                        TextButton(onClick = {
-                            catalog.addTag(entry.key, tag); tag = ""; revision++
-                            localTags = catalog.tags(entry.key)
-                        }) { Text("Add") }
-                    }
-                    val activeCollection = UnifiedQuery.parse(query).collection?.let { id ->
-                        collections.find { it.expression == null && (it.id.toString() == id || it.name == id) }
-                    }
-                    if (activeCollection != null) {
-                        Row {
-                            TextButton(onClick = { catalog.shiftInCollection(activeCollection.id, entry.key, -1); revision++; selected = null }) {
-                                Text("Move up")
-                            }
-                            TextButton(onClick = { catalog.shiftInCollection(activeCollection.id, entry.key, 1); revision++; selected = null }) {
-                                Text("Move down")
-                            }
-                            TextButton(onClick = { catalog.removeFromCollection(activeCollection.id, entry.key); revision++; selected = null }) {
-                                Text("Remove from collection")
-                            }
-                        }
-                    }
-                    if (collections.isNotEmpty()) {
-                        Text("Add to a manual collection:")
-                        collections.filter { it.expression == null }.take(12).forEach { collection ->
-                            TextButton(onClick = { catalog.addToCollection(collection.id, entry.key); revision++ }) {
-                                Text("+ ${collection.name}")
-                            }
-                        }
-                    }
-                    Text("The original game, app or file is never moved or deleted by these actions.")
                 }
-            },
-            confirmButton = { TextButton(onClick = { open(entry); selected = null }) { Text("Open") } },
-            dismissButton = { TextButton(onClick = { selected = null }) { Text("Close") } },
-        )
+                if (entry.kind in setOf("FILE", "FOLDER") && entry.target.isNotBlank()) {
+                    TextButton(onClick = { onBrowseFolder(if (entry.kind == "FOLDER") entry.target else entry.parentUri
+                        ?: WorkspaceDocuments(context).rootDocument(Uri.parse(entry.target)).toString()); selected = null }) { Text("Show in Files") }
+                }
+                if (entry.source == "user") {
+                    OutlinedTextField(title, { title = it.take(120) }, label = { Text("Shortcut name") })
+                    OutlinedTextField(target, { target = it.take(2048) }, label = { Text(if (entry.kind == "COMMAND") "Command" else "URL") })
+                    TextButton(enabled = !busy, onClick = { mutate { catalog.updateCustom(entry.key, title, target) }; selected = null }) { Text("Save shortcut") }
+                    TextButton(enabled = !busy, onClick = { confirm = "Delete this custom shortcut?" to {
+                        mutate("Shortcut deleted") { catalog.deleteCustom(entry.key) }; selected = null
+                    } }) { Text("Delete shortcut…") }
+                }
+                Text("Tags", fontWeight = FontWeight.Medium)
+                tags.forEach { value -> TextButton(enabled = !busy, onClick = { mutate { catalog.removeTag(entry.key, value) } }) { Text("Remove: $value") } }
+                Row {
+                    OutlinedTextField(tag, { tag = it.take(48) }, label = { Text("Add a tag") }, singleLine = true, modifier = Modifier.weight(1f))
+                    TextButton(enabled = tag.isNotBlank() && !busy, onClick = { val value = tag; tag = ""; mutate { catalog.addTag(entry.key, value) } }) { Text("Add") }
+                }
+                val active = UnifiedQuery.parse(query).collection?.let { id -> collections.find { it.id.toString() == id && it.expression == null } }
+                if (active != null) Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    TextButton(enabled = !busy, onClick = { mutate { catalog.shiftInCollection(active.id, entry.key, -1) }; selected = null }) { Text("Move up") }
+                    TextButton(enabled = !busy, onClick = { mutate { catalog.shiftInCollection(active.id, entry.key, 1) }; selected = null }) { Text("Move down") }
+                    TextButton(enabled = !busy, onClick = { mutate { catalog.removeFromCollection(active.id, entry.key) }; selected = null }) { Text("Remove here") }
+                }
+                Text("Add to a manual collection", fontWeight = FontWeight.Medium)
+                OutlinedTextField(collectionFilter, { collectionFilter = it }, label = { Text("Find collection") }, singleLine = true)
+                collections.filter { it.expression == null && it.name.contains(collectionFilter, true) }.take(50).forEach { col ->
+                    TextButton(enabled = !busy, onClick = { mutate("Added to ${col.name}") { catalog.addToCollection(col.id, entry.key) } }) { Text("+ ${col.name}") }
+                }
+            }
+        }, confirmButton = { TextButton(enabled = !busy && !entry.missing, onClick = { selected = null; open(entry) }) { Text("Open") } },
+            dismissButton = { TextButton(onClick = { selected = null }) { Text("Close") } })
     }
-    if (showNewCollection) {
+    collectionEditor?.takeIf { confirm == null }?.let { col ->
+        var name by remember(col.id) { mutableStateOf(col.name) }
+        var expression by remember(col.id) { mutableStateOf(col.expression ?: "") }
+        var error by remember(col.id) { mutableStateOf("") }
+        AlertDialog(onDismissRequest = { collectionEditor = null }, title = { Text(if (col.id == 0L) "New collection" else "Edit collection") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(name, { name = it.take(80) }, label = { Text("Name") })
+                OutlinedTextField(expression, { expression = it.take(512) }, label = { Text("Smart query; leave blank for manual") })
+                if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+                if (col.id != 0L) TextButton(onClick = { confirm = "Delete ${col.name}? Its games and files stay in their original locations." to {
+                    mutate("Collection deleted") { catalog.deleteCollection(col.id) }; collectionEditor = null
+                } }) { Text("Delete collection…") }
+            }
+        }, confirmButton = { TextButton(enabled = !busy && name.isNotBlank(), onClick = {
+            scope.launch {
+                workspaceResult { withContext(Dispatchers.IO) {
+                    if (col.id == 0L) catalog.createCollection(name, expression) else catalog.updateCollection(col.id, name, expression)
+                } }.onSuccess { collectionEditor = null }.onFailure { error = it.message ?: "Could not save collection" }
+            }
+        }) { Text("Save") } }, dismissButton = { TextButton(onClick = { collectionEditor = null }) { Text("Cancel") } })
+    }
+    if (newShortcut) {
         var name by remember { mutableStateOf("") }
-        var filter by remember { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { showNewCollection = false },
-            title = { Text("New collection") },
-            text = { Column {
-                OutlinedTextField(name, { name = it }, label = { Text("Name") })
-                OutlinedTextField(filter, { filter = it },
-                    label = { Text("Smart query (blank = manual collection)") })
-            } },
-            confirmButton = { TextButton(onClick = {
-                runCatching { catalog.createCollection(name, filter) }
-                    .onSuccess { showNewCollection = false; revision++ }
-                    .onFailure { status = it.message ?: "Could not create collection" }
-            }) { Text("Create") } },
-            dismissButton = { TextButton(onClick = { showNewCollection = false }) { Text("Cancel") } })
-    }
-    if (showNewShortcut) {
-        var title by remember { mutableStateOf("") }
         var target by remember { mutableStateOf("") }
-        var asCommand by remember { mutableStateOf(false) }
-        AlertDialog(onDismissRequest = { showNewShortcut = false },
-            title = { Text("New shortcut") },
-            text = { Column {
-                OutlinedTextField(title, { title = it }, label = { Text("Name") })
-                OutlinedTextField(target, { target = it },
-                    label = { Text(if (asCommand) "Termux command" else "https:// URL") })
-                TextButton(onClick = { asCommand = !asCommand }) {
-                    Text(if (asCommand) "Type: command (tap for link)" else "Type: website (tap for command)")
-                }
-            } },
-            confirmButton = { TextButton(onClick = {
-                runCatching { catalog.addCustom(if (asCommand) "COMMAND" else "LINK", title, target) }
-                    .onSuccess { showNewShortcut = false; revision++ }
-                    .onFailure { status = it.message ?: "Could not create shortcut" }
-            }) { Text("Add") } },
-            dismissButton = { TextButton(onClick = { showNewShortcut = false }) { Text("Cancel") } })
+        var command by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf("") }
+        AlertDialog(onDismissRequest = { newShortcut = false }, title = { Text("New shortcut") }, text = {
+            Column {
+                OutlinedTextField(name, { name = it.take(120) }, label = { Text("Name") })
+                OutlinedTextField(target, { target = it.take(2048) }, label = { Text(if (command) "Termux command" else "https:// URL") })
+                TextButton(onClick = { command = !command }) { Text(if (command) "Type: command" else "Type: website") }
+                if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+            }
+        }, confirmButton = { TextButton(enabled = name.isNotBlank() && target.isNotBlank(), onClick = { scope.launch {
+            workspaceResult { withContext(Dispatchers.IO) { catalog.addCustom(if (command) "COMMAND" else "LINK", name, target) } }
+                .onSuccess { newShortcut = false }.onFailure { error = it.message ?: "Could not add shortcut" }
+        } }) { Text("Add") } }, dismissButton = { TextButton(onClick = { newShortcut = false }) { Text("Cancel") } })
+    }
+    confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Confirm") }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("Confirm") } },
+        dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } }) }
+    restoreUri?.let { uri -> AlertDialog(onDismissRequest = { restoreUri = null }, title = { Text("Restore workspace backup?") },
+        text = { Text("Collections and organization will merge. Backed-up notes and window layout replace the current ones. Storage permissions must be reconnected on a new device.") },
+        confirmButton = { TextButton(onClick = { restoreUri = null; work { withContext(Dispatchers.IO) {
+            val raw = (context.contentResolver.openInputStream(uri) ?: error("Cannot read backup"))
+                .bufferedReader().use(WorkspaceBackup::readBounded)
+            WorkspaceBackup.restore(context, catalog, raw)
+            "Backup restored. Reconnect storage folders if needed."
+        } } }) { Text("Restore") } }, dismissButton = { TextButton(onClick = { restoreUri = null }) { Text("Cancel") } }) }
+}
+
+@Composable
+private fun CatalogArtwork(entry: CatalogEntry) {
+    val shape = RoundedCornerShape(8.dp)
+    val modifier = Modifier.size(44.dp).clip(shape)
+    if (!entry.artwork.isNullOrBlank()) AsyncImage(model = entry.artwork, contentDescription = null,
+        modifier = modifier, contentScale = ContentScale.Crop)
+    else if (entry.kind == "APP") {
+        val context = LocalContext.current
+        val icon by produceState<android.graphics.Bitmap?>(null, entry.target) {
+            value = withContext(Dispatchers.IO) { runCatching { context.packageManager.getApplicationIcon(entry.target).toBitmap(48, 48) }.getOrNull() }
+        }
+        if (icon != null) Image(icon!!.asImageBitmap(), null, modifier = modifier)
+        else Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Text("▦") }
+    } else Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        Text(when (entry.kind) { "GAME" -> "▶"; "FOLDER" -> "▣"; "COMMAND" -> ">_"; "LINK" -> "↗"; "TOOL" -> "⚙"; else -> "◇" })
     }
 }

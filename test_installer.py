@@ -1,21 +1,11 @@
-"""Local patcher checks; intentionally uses synthetic source anchors, not upstream code."""
+"""Installer regression checks: idempotent upgrades and all-or-nothing preflight."""
 from pathlib import Path
 import subprocess
 import tempfile
 import sys
 
-SCRIPT = Path(__file__).with_name("install_workspace.py")
-
-
-def test():
-    with tempfile.TemporaryDirectory() as d:
-        base = Path(d)
-        act = base / "app/src/main/kotlin/com/playfieldportal/launcher/MainActivity.kt"
-        manifest = base / "app/src/main/AndroidManifest.xml"
-        gradle = base / "app/build.gradle.kts"
-        act.parent.mkdir(parents=True)
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        act.write_text('''package test
+SCRIPT=Path(__file__).with_name('install_workspace.py')
+ACT='''package test
 import com.playfieldportal.launcher.discord.DiscordBootstrap
     private var rotatePromptShowing = false
                 //Left blank so that it can be ignored, preventing users from exiting the launcher.
@@ -23,23 +13,62 @@ import com.playfieldportal.launcher.discord.DiscordBootstrap
                             AppXmbHost()
         // Let the gamepad handler process it first; fall back to normal dispatch
         if (gamepadInputHandler.onMotionEvent(event)) return true
-''')
-        manifest.write_text('<manifest>\n    <application\n    />\n</manifest>\n')
-        gradle.write_text('    implementation(libs.androidx.core.ktx)\n')
-        first = subprocess.run([sys.executable,str(SCRIPT),str(base)],capture_output=True,text=True)
-        assert first.returncode == 0, first.stdout + first.stderr
-        assert 'XmbWorkspaceOverlay(' in act.read_text()
-        assert 'com.termux.permission.RUN_COMMAND' in manifest.read_text()
-        assert 'implementation(libs.androidx.documentfile)' in gradle.read_text()
-        for filename in ('XmbWorkspaceOverlay.kt', 'UnifiedQuery.kt', 'UnifiedCatalog.kt', 'UnifiedLibraryPane.kt'):
-            assert (act.parent / 'workspace' / filename).exists(), filename
-        assert 'onOpenPfpGame' in act.read_text()
-        assert 'onSetPfpFavorite' in act.read_text()
-        second = subprocess.run([sys.executable,str(SCRIPT),str(base)],capture_output=True,text=True)
-        assert second.returncode == 0, second.stdout + second.stderr
-        assert act.read_text().count('XmbWorkspaceOverlay(') == 1
-        assert manifest.read_text().count('com.termux.permission.RUN_COMMAND') == 1
-        assert gradle.read_text().count('implementation(libs.androidx.documentfile)') == 1
-    print('PASS: atomic anchor matching, patch installation, idempotence and file copying')
+                val rotatePrompt = showRotatePrompt(orientationMode, LocalConfiguration.current.orientation)
+'''
+MANIFEST='<manifest>\n    <application\n    >\n    </application>\n</manifest>\n'
+GRADLE='''android {
+    buildFeatures {
+    }
+}
+dependencies {
+    implementation(libs.androidx.core.ktx)
+}
+'''
 
-if __name__ == '__main__': test()
+
+def fixture(root):
+    act=root/'app/src/main/kotlin/com/playfieldportal/launcher/MainActivity.kt'
+    manifest=root/'app/src/main/AndroidManifest.xml'
+    gradle=root/'app/build.gradle.kts'
+    for path,data in [(act,ACT),(manifest,MANIFEST),(gradle,GRADLE)]:
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(data)
+    return act,manifest,gradle
+
+
+def invoke(root,*args):
+    return subprocess.run([sys.executable,str(SCRIPT),str(root),*args],capture_output=True,text=True)
+
+
+def main():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d); act,manifest,gradle=fixture(base)
+        check=invoke(base,'--check'); assert check.returncode==0,check.stdout+check.stderr
+        assert act.read_text()==ACT
+        first=invoke(base);assert first.returncode==0,first.stdout+first.stderr
+        assert 'workspace.WorkspaceTermuxReceiver' in manifest.read_text()
+        assert 'android:exported="false"' in manifest.read_text()
+        assert 'workspace_key' in act.read_text()
+        assert 'landscape_prompt' in act.read_text()
+        assert 'testImplementation(libs.robolectric)' in gradle.read_text()
+        copied=act.parent/'workspace/UnifiedCatalog.kt'
+        assert copied.exists()
+        copied.write_text('// previous ArcDeck version')
+        second=invoke(base);assert second.returncode==0,second.stdout+second.stderr
+        assert copied.read_text().startswith('package ')
+        assert act.read_text().count('XmbWorkspaceOverlay(')==1
+        assert manifest.read_text().count('workspace.WorkspaceTermuxReceiver')==1
+        assert gradle.read_text().count('implementation(libs.coil.compose)')==1
+        stable={p:p.read_bytes() for p in base.rglob('*') if p.is_file()}
+        third=invoke(base);assert third.returncode==0,third.stdout+third.stderr
+        assert all(p.read_bytes()==data for p,data in stable.items())
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);act,manifest,gradle=fixture(base)
+        gradle.write_text('unrecognized upstream file')
+        failed=invoke(base);assert failed.returncode!=0
+        assert act.read_text()==ACT and manifest.read_text()==MANIFEST
+        assert not list(base.rglob('*.arcdeck.orig'))
+        assert not (act.parent/'workspace').exists()
+    print('PASS: atomic preflight, dry run, installation, upgrade, idempotence and receiver integration')
+
+
+if __name__=='__main__':main()

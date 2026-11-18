@@ -1,4 +1,4 @@
-name: Build ArcDeck APK
+name: Test and build ArcDeck release
 on:
   push:
     branches: [main]
@@ -9,8 +9,61 @@ concurrency:
   group: arcdeck-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  tests:
+    name: Android database and phone UI tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout ArcDeck
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: arcdeck
+          persist-credentials: false
+      - name: Checkout pinned upstream
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: JohnnyCollado/PlayFieldPortal
+          ref: 5ee271ea9545685417aecdd13b5ace033cdb7806
+          path: upstream
+          lfs: false
+          persist-credentials: false
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1
+      - name: Set up Android
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Verify patch installer and prepare app
+        run: |
+          cd arcdeck
+          python3 test_installer.py
+          python3 scripts/prepare_build.py ../upstream --build-number "$GITHUB_RUN_NUMBER"
+          sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
+      - name: Run real Android database, document provider and Compose tests
+        working-directory: upstream
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testLiteDebugUnitTest --tests 'com.playfieldportal.launcher.workspace.*' --no-daemon --stacktrace --max-workers=2
+      - name: Upload test reports and phone screenshot
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ArcDeck-test-results
+          path: |
+            upstream/app/build/reports/tests/
+            upstream/app/build/test-results/
+            upstream/build/reports/arcdeck/
+          if-no-files-found: ignore
+          retention-days: 30
   apk:
-    name: Build ${{ matrix.flavor }} APK
+    name: Build ${{ matrix.flavor }} release
+    needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -18,16 +71,16 @@ jobs:
       matrix:
         include:
           - flavor: full
-            task: assembleFullDebug
+            task: assembleFullRelease
           - flavor: lite
-            task: assembleLiteDebug
+            task: assembleLiteRelease
     steps:
       - name: Checkout ArcDeck
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: arcdeck
           persist-credentials: false
-      - name: Checkout pinned PlayFieldPortal source
+      - name: Checkout pinned upstream
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: JohnnyCollado/PlayFieldPortal
@@ -35,48 +88,38 @@ jobs:
           path: upstream
           lfs: ${{ matrix.flavor == 'full' }}
           persist-credentials: false
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Gradle caching
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1
-      - name: Set up Android command-line tools
+      - name: Set up Android
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
-      - name: Check installer and search contracts
-        working-directory: arcdeck
+      - name: Prepare release source
         run: |
-          python3 test_installer.py
-          python3 tests/test_search_sql.py
-      - name: Apply workspace and build identity
-        run: python3 arcdeck/scripts/prepare_build.py upstream --build-number "$GITHUB_RUN_NUMBER"
-      - name: Install Android SDK
-        run: |
+          python3 arcdeck/scripts/prepare_build.py upstream --build-number "$GITHUB_RUN_NUMBER"
           sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
           if [ '${{ matrix.flavor }}' = 'full' ]; then
             sdkmanager --install 'ndk;27.0.12077973' 'cmake;3.22.1'
-          fi
-      - name: Verify Full SDK bytes
-        if: matrix.flavor == 'full'
-        run: |
-          python3 - <<'PY'
+            python3 - <<'PY'
           from pathlib import Path
           from zipfile import is_zipfile
           for name in ('discord_partner_sdk.aar', 'discord_partner_sdk_krisp.aar'):
               path = Path('upstream/discord/discord-native/libs') / name
-              if not is_zipfile(path):
-                  raise SystemExit(f'Missing Git LFS SDK bytes: {path}')
+              if not is_zipfile(path): raise SystemExit(f'Missing SDK bytes: {path}')
           PY
-      - name: Compile installable APK
+          fi
+      - name: Build optimized unsigned release APK
         working-directory: upstream
         run: |
           chmod +x gradlew
           ./gradlew :app:${{ matrix.task }} --no-daemon --stacktrace --max-workers=2
-      - name: Collect APK and provenance
+      - name: Collect release and provenance
         env:
           FLAVOR: ${{ matrix.flavor }}
         run: |
@@ -84,32 +127,31 @@ jobs:
           import hashlib, json, os, shutil
           from pathlib import Path
           flavor = os.environ['FLAVOR']
-          apks = list(Path(f'upstream/app/build/outputs/apk/{flavor}/debug').glob('*.apk'))
-          if len(apks) != 1:
-              raise SystemExit(f'Expected one APK, got {apks}')
-          out = Path('dist')
-          out.mkdir()
-          apk = out / f'ArcDeck-Workspace-{flavor}-debug.apk'
+          apks = list(Path(f'upstream/app/build/outputs/apk/{flavor}/release').glob('*.apk'))
+          if len(apks) != 1: raise SystemExit(f'Expected one APK, got {apks}')
+          out = Path('dist'); out.mkdir()
+          apk = out / f'ArcDeck-1.0.0-{flavor}-unsigned.apk'
           shutil.copy2(apks[0], apk)
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
-          (out / 'SHA256SUMS.txt').write_text(f'{digest}  {apk.name}\n')
           (out / 'build-info.json').write_text(json.dumps({
               'arcdeck_commit': os.environ['GITHUB_SHA'],
               'upstream_commit': '5ee271ea9545685417aecdd13b5ace033cdb7806',
-              'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
-              'sha256': digest, 'signing': 'Android debug key', 'device_tested': False
-          }, indent=2) + '\n')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f'### ArcDeck {flavor} APK built\n\nDownload the **ArcDeck-Workspace-{flavor}-debug** artifact below, extract the APK and install it on Android 10+. Physical-device testing is pending.\n')
+              'version': '1.0.0', 'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
+              'sha256': digest, 'signing': 'unsigned; owner signs locally',
+              'tests': 'Android database, documents and phone UI regression suite passed',
+              'physical_device_tested': False
+          }, indent=2)+'\n')
+          if flavor == 'lite':
+              shutil.copy2(Path(os.environ['ANDROID_HOME']) / 'build-tools/37.0.0/lib/apksigner.jar', out / 'apksigner.jar')
           PY
-      - name: Upload APK
+      - name: Upload release for owner signing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ArcDeck-Workspace-${{ matrix.flavor }}-debug
+          name: ArcDeck-1.0.0-${{ matrix.flavor }}-unsigned
           path: dist/*
           if-no-files-found: error
           retention-days: 30
-      - name: Upload diagnostics on failure
+      - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

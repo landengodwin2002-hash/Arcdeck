@@ -6,11 +6,12 @@ import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
-import androidx.documentfile.provider.DocumentFile
 import com.playfieldportal.core.domain.model.Game
 import com.playfieldportal.core.domain.model.GameContentType
 import java.util.ArrayDeque
 import java.util.Locale
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -34,6 +35,8 @@ internal data class CatalogEntry(
     val favorite: Boolean = false,
     val pinned: Boolean = false,
     val lastOpened: Long = 0,
+    val artwork: String? = null,
+    val parentUri: String? = null,
 )
 
 internal data class CatalogCollection(val id: Long, val name: String, val expression: String?)
@@ -41,8 +44,17 @@ internal data class CatalogRoot(val uri: String, val label: String, val lastScan
 internal data class ScanReport(val indexed: Int, val complete: Boolean, val status: String)
 
 internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.applicationContext,
-    "arcdeck_unified_v1.db", null, 1) {
+    "arcdeck_unified_v1.db", null, 2) {
+    companion object {
+        @Volatile private var shared: UnifiedCatalog? = null
+        fun shared(context: Context): UnifiedCatalog = shared ?: synchronized(this) {
+            shared ?: UnifiedCatalog(context.applicationContext).also { shared = it }
+        }
+    }
     private val app = context.applicationContext
+    private val _revision = MutableStateFlow(0L)
+    val revision = _revision.asStateFlow()
+    private fun changed() { _revision.value = _revision.value + 1 }
 
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
@@ -60,7 +72,9 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             missing INTEGER NOT NULL DEFAULT 0,
             source_favorite INTEGER NOT NULL DEFAULT 0,
             source_recent INTEGER NOT NULL DEFAULT 0,
-            seen INTEGER NOT NULL DEFAULT 0
+            seen INTEGER NOT NULL DEFAULT 0,
+            artwork TEXT,
+            parent_uri TEXT
         )""")
         db.execSQL("CREATE INDEX records_source ON records(source)")
         db.execSQL("CREATE INDEX records_kind ON records(kind,missing)")
@@ -97,8 +111,9 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     }
 
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
-        // Deliberately no drop-and-recreate migrations: aliases/tags/collections are user data.
-        throw IllegalStateException("Unsupported catalog schema upgrade $old to $new")
+        require(new == 2 && old == 1) { "Unsupported catalog schema upgrade $old to $new" }
+        db.execSQL("ALTER TABLE records ADD COLUMN artwork TEXT")
+        db.execSQL("ALTER TABLE records ADD COLUMN parent_uri TEXT")
     }
 
     private fun flag(v: Boolean) = if (v) 1 else 0
@@ -108,7 +123,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             put("title", entry.title); put("subtitle", entry.subtitle)
             put("target", entry.target); put("source", entry.source)
             put("missing", flag(entry.missing)); put("source_favorite", flag(entry.sourceFavorite))
-            put("source_recent", entry.sourceRecent); put("seen", now)
+            put("source_recent", entry.sourceRecent); put("seen", now); put("artwork", entry.artwork); put("parent_uri", entry.parentUri)
         }
         val changed = db.update("records", values, "key=?", arrayOf(entry.key))
         if (changed == 0) db.insertOrThrow("records", null, values)
@@ -122,9 +137,10 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     @Synchronized
     fun syncSource(source: String, entries: List<CatalogEntry>, complete: Boolean = true) {
         val db = writableDatabase
-        val stamp = System.currentTimeMillis()
         db.beginTransaction()
         try {
+            val stamp = db.rawQuery("SELECT COALESCE(MAX(seen),0)+1 FROM records WHERE source=?",
+                arrayOf(source)).use { it.moveToFirst(); it.getLong(0) }
             entries.forEach { upsert(db, it, stamp) }
             if (complete) {
                 db.execSQL("UPDATE records SET missing=1 WHERE source=? AND seen<>?",
@@ -132,6 +148,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        changed()
     }
 
     /** PFP is the authority: game IDs, launch settings and history stay in its own DB. */
@@ -144,7 +161,8 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             val key = if (isAppShortcut) "pfp-shortcut:${game.id}" else "pfp-game:${game.id}"
             CatalogEntry(key, if (isAppShortcut) "SHORTCUT" else "GAME", game.displayTitle,
                 "${game.platformId} · ${game.displayGenre ?: ""}".trim().trimEnd('·',' '),
-                game.id.toString(), "pfp", game.isMissing, game.isFavorite, game.lastPlayedAt ?: 0L)
+                game.id.toString(), "pfp", game.isMissing, game.isFavorite, game.lastPlayedAt ?: 0L,
+                artwork = game.iconUri ?: game.artworkUri ?: game.boxArtUri)
         }
         syncSource("pfp", entries)
         val db = writableDatabase
@@ -161,6 +179,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        changed()
     }
 
     @Synchronized
@@ -211,6 +230,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         val db = writableDatabase
         // Preserve scan time when relinking an existing root.
         db.insertWithOnConflict("roots", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+        changed()
     }
 
     fun roots(): List<CatalogRoot> {
@@ -232,32 +252,25 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             setRootStatus(rootUri, "Permission missing; relink folder", false)
             return ScanReport(0, false, "Permission missing")
         }
-        val root = DocumentFile.fromTreeUri(app, rootUri)
-        if (root == null || !root.canRead()) {
-            setRootStatus(rootUri, "Folder unavailable; existing index retained", false)
-            return ScanReport(0, false, "Folder unavailable")
-        }
         val results = mutableListOf<CatalogEntry>()
-        val pending = ArrayDeque<Pair<DocumentFile, Int>>()
-        pending.add(root to 0)
+        val documents = WorkspaceDocuments(app)
+        val pending = ArrayDeque<Pair<Uri, Int>>()
+        pending.add(documents.rootDocument(rootUri) to 0)
         var complete = true
         var failure = false
         val visited = mutableSetOf<String>()
         while (pending.isNotEmpty() && results.size < maxEntries) {
             val (folder, depth) = pending.removeFirst()
-            if (!visited.add(folder.uri.toString())) continue
-            val children = try { folder.listFiles() } catch (_: Exception) {
-                failure = true; continue
-            }
-            for (child in children) {
+            if (!visited.add(folder.toString())) continue
+            val listing = try { documents.children(folder, (maxEntries - results.size + 1).coerceAtLeast(1)) }
+                catch (_: Exception) { failure = true; continue }
+            if (listing.truncated) complete = false
+            for (child in listing.items) {
                 if (results.size >= maxEntries) { complete = false; break }
-                val uri = child.uri.toString()
-                val isDir = child.isDirectory
-                results.add(CatalogEntry("file:$uri", if (isDir) "FOLDER" else "FILE",
-                    child.name ?: "Unnamed", child.type ?: if (isDir) "Folder" else "File",
-                    uri, source))
-                if (isDir && depth < maxDepth) pending.add(child to depth + 1)
-                else if (isDir) complete = false
+                results.add(CatalogEntry("file:${child.uri}", if (child.directory) "FOLDER" else "FILE",
+                    child.name, child.mime, child.uri.toString(), source, parentUri = folder.toString()))
+                if (child.directory && depth < maxDepth) pending.add(child.uri to depth + 1)
+                else if (child.directory) complete = false
             }
         }
         if (pending.isNotEmpty()) complete = false
@@ -275,11 +288,13 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             if (scanned) put("last_scan", System.currentTimeMillis())
         }
         writableDatabase.update("roots", values, "uri=?", arrayOf(uri.toString()))
+        changed()
     }
 
     fun get(key: String): CatalogEntry? {
         readableDatabase.rawQuery("""SELECT r.key,r.kind,r.title,r.subtitle,r.target,r.source,r.missing,
-                m.alias,(COALESCE(m.favorite,0) | r.source_favorite),m.pinned,m.last_opened FROM records r
+                m.alias,(COALESCE(m.favorite,0) | r.source_favorite),m.pinned,m.last_opened,
+                r.source_favorite,r.source_recent,r.artwork,r.parent_uri FROM records r
                 LEFT JOIN metadata m ON m.key=r.key WHERE r.key=? LIMIT 1""", arrayOf(key)).use { c ->
             if (c.moveToFirst()) return mapRow(c)
         }
@@ -288,16 +303,17 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
 
     private fun mapRow(c: android.database.Cursor) = CatalogEntry(
         c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4),
-        c.getString(5), c.getInt(6) != 0, false, 0L, if (c.isNull(7)) null else c.getString(7),
-        c.getInt(8) != 0, c.getInt(9) != 0, c.getLong(10)
+        c.getString(5), c.getInt(6) != 0, c.getInt(11) != 0, c.getLong(12), if (c.isNull(7)) null else c.getString(7),
+        c.getInt(8) != 0, c.getInt(9) != 0, c.getLong(10), if (c.isNull(13)) null else c.getString(13), if (c.isNull(14)) null else c.getString(14)
     )
 
     /** Search across all sources and filters. All SQL values use bound placeholders. */
     fun search(raw: String, limit: Int = 100, offset: Int = 0): List<CatalogEntry> {
-        val parsed = UnifiedQuery.parse(raw)
+        val parsed = resolveQuery(UnifiedQuery.parse(raw))
         if (parsed.invalid.isNotEmpty()) return emptyList()
         val sql = StringBuilder("""SELECT r.key,r.kind,r.title,r.subtitle,r.target,r.source,r.missing,
-            m.alias,(COALESCE(m.favorite,0) | r.source_favorite),m.pinned,m.last_opened FROM records r
+            m.alias,(COALESCE(m.favorite,0) | r.source_favorite),m.pinned,m.last_opened,
+                r.source_favorite,r.source_recent,r.artwork,r.parent_uri FROM records r
             LEFT JOIN metadata m ON m.key=r.key""")
         val args = mutableListOf<String>()
         val fts = UnifiedQuery.toFts(parsed.words)
@@ -309,19 +325,23 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         // A ROM indexed through SAF is the same object as its PFP game. Universal
         // results prefer the game entry; type:file still exposes the underlying file.
         if (parsed.kinds.isEmpty() && parsed.sources.isEmpty()) {
-            conditions.add("NOT (r.kind='FILE' AND EXISTS(SELECT 1 FROM game_files gf WHERE gf.rom_uri=r.target))")
+            conditions.add("NOT (r.kind='FILE' AND EXISTS(SELECT 1 FROM game_files gf JOIN records gr ON gr.key=gf.game_key WHERE gf.rom_uri=r.target AND gr.missing=0))")
         }
         if (parsed.kinds.isNotEmpty()) {
             conditions.add("r.kind IN (${parsed.kinds.joinToString(",") { "?" }})")
             args.addAll(parsed.kinds)
         }
         if (parsed.sources.isNotEmpty()) {
-            conditions.add("r.source IN (${parsed.sources.joinToString(",") { "?" }})")
-            args.addAll(parsed.sources)
+            conditions.add(parsed.sources.joinToString(" OR ", "(", ")") { source ->
+                args.add(if (source == "files" || source == "saf") "saf:%" else source)
+                if (source == "files" || source == "saf") "r.source LIKE ?" else "r.source=?"
+            })
         }
         if (parsed.showMissing != null) {
             conditions.add("r.missing=?"); args.add(flag(parsed.showMissing).toString())
         } else conditions.add("r.missing=0")
+        if (parsed.favorite == true) conditions.add("(COALESCE(m.favorite,0) | r.source_favorite)<>0")
+        if (parsed.pinned == true) conditions.add("COALESCE(m.pinned,0)<>0")
         parsed.tags.forEach { tag ->
             conditions.add("EXISTS(SELECT 1 FROM tags t WHERE t.key=r.key AND t.tag=?)")
             args.add(tag)
@@ -346,7 +366,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             } else "COALESCE(m.manual_order,0) ASC, r.title COLLATE NOCASE"
             UnifiedQuery.SortOrder.RELEVANCE -> "COALESCE(m.pinned,0) DESC, (COALESCE(m.favorite,0) | r.source_favorite) DESC, MAX(r.source_recent,COALESCE(m.last_opened,0)) DESC, r.title COLLATE NOCASE"
         })
-        sql.append(" LIMIT ? OFFSET ?")
+        sql.append(", r.key ASC LIMIT ? OFFSET ?")
         args.add(limit.coerceIn(1, 500).toString()); args.add(offset.coerceAtLeast(0).toString())
         val result = mutableListOf<CatalogEntry>()
         readableDatabase.rawQuery(sql.toString(), args.toTypedArray()).use { c ->
@@ -379,18 +399,21 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         db.execSQL("DELETE FROM record_fts WHERE key=?", arrayOf(key))
         db.execSQL("INSERT INTO record_fts(key,title,subtitle) VALUES(?,?,?)",
             arrayOf(key, record.title, record.subtitle + " " + (alias ?: "")))
+        changed()
     }
 
     @Synchronized
     fun setFavorite(key: String, value: Boolean) {
         makeMetadata(key)
         writableDatabase.execSQL("UPDATE metadata SET favorite=? WHERE key=?", arrayOf<Any?>(flag(value), key))
+        changed()
     }
 
     @Synchronized
     fun setPinned(key: String, value: Boolean) {
         makeMetadata(key)
         writableDatabase.execSQL("UPDATE metadata SET pinned=? WHERE key=?", arrayOf<Any?>(flag(value), key))
+        changed()
     }
 
     @Synchronized
@@ -398,6 +421,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         makeMetadata(key)
         writableDatabase.execSQL("UPDATE metadata SET last_opened=? WHERE key=?",
             arrayOf<Any?>(System.currentTimeMillis(), key))
+        changed()
     }
 
     fun tags(key: String): List<String> {
@@ -411,13 +435,19 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     @Synchronized
     fun addTag(key: String, tag: String) {
         val clean = UnifiedQuery.normalizeTag(tag)
-        if (clean.isNotBlank()) writableDatabase.execSQL("INSERT OR IGNORE INTO tags(key,tag) VALUES(?,?)",
-            arrayOf(key, clean))
+        require(get(key) != null) { "Item no longer exists" }
+        if (clean.isNotBlank()) {
+            makeMetadata(key)
+            writableDatabase.execSQL("INSERT OR IGNORE INTO tags(key,tag) VALUES(?,?)", arrayOf(key, clean))
+            changed()
+        }
     }
 
     @Synchronized
-    fun removeTag(key: String, tag: String) = writableDatabase.execSQL(
-        "DELETE FROM tags WHERE key=? AND tag=?", arrayOf(key, UnifiedQuery.normalizeTag(tag)))
+    fun removeTag(key: String, tag: String) {
+        writableDatabase.execSQL("DELETE FROM tags WHERE key=? AND tag=?", arrayOf(key, UnifiedQuery.normalizeTag(tag)))
+        changed()
+    }
 
     fun collections(): List<CatalogCollection> {
         val output = mutableListOf<CatalogCollection>()
@@ -436,24 +466,33 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             put("name", clean)
             put("expression", expression?.trim()?.takeIf { it.isNotEmpty() })
         }
-        return writableDatabase.insertOrThrow("collections", null, values)
+        validateExpression(expression)
+        return writableDatabase.insertOrThrow("collections", null, values).also { changed() }
     }
 
     @Synchronized
     fun addToCollection(collectionId: Long, key: String) {
-        writableDatabase.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key) VALUES (?,?)",
-            arrayOf<Any?>(collectionId, key))
+        val collection = collections().firstOrNull { it.id == collectionId }
+            ?: error("Collection no longer exists")
+        require(collection.expression == null) { "Smart collections are populated by their query" }
+        makeMetadata(key)
+        writableDatabase.execSQL("""INSERT OR IGNORE INTO memberships(collection_id,key,position)
+            SELECT ?,?,COALESCE(MAX(position),-1)+1 FROM memberships WHERE collection_id=?""",
+            arrayOf<Any?>(collectionId, key, collectionId))
+        changed()
     }
 
     @Synchronized
     fun removeFromCollection(collectionId: Long, key: String) {
         writableDatabase.execSQL("DELETE FROM memberships WHERE collection_id=? AND key=?",
             arrayOf<Any?>(collectionId, key))
+        changed()
     }
 
     @Synchronized
     fun deleteCollection(collectionId: Long) {
         writableDatabase.execSQL("DELETE FROM collections WHERE id=?", arrayOf(collectionId))
+        changed()
     }
 
     /** Swap a membership with its neighbor. Uses a single transaction and contiguous positions. */
@@ -464,8 +503,8 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         db.beginTransaction()
         try {
             val order = mutableListOf<String>()
-            db.rawQuery("""SELECT key FROM memberships WHERE collection_id=?
-                ORDER BY position ASC, rowid ASC""", arrayOf(collectionId.toString())).use { c ->
+            db.rawQuery("""SELECT mm.key FROM memberships mm JOIN records r ON r.key=mm.key
+                WHERE collection_id=? ORDER BY position ASC, r.title COLLATE NOCASE, r.key ASC""", arrayOf(collectionId.toString())).use { c ->
                 while (c.moveToNext()) order.add(c.getString(0))
             }
             val index = order.indexOf(key)
@@ -479,137 +518,187 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        changed()
+    }
+
+    private fun validateExpression(expression: String?) {
+        if (!expression.isNullOrBlank()) require(UnifiedQuery.parse(expression).invalid.isEmpty()) {
+            "Invalid saved query"
+        }
+    }
+
+    private fun resolveQuery(query: UnifiedQuery, visited: Set<Long> = emptySet()): UnifiedQuery {
+        val name = query.collection ?: return query
+        val collection = collections().firstOrNull { it.id.toString() == name || it.name.equals(name, true) }
+            ?: return query.copy(invalid = query.invalid + "Collection not found")
+        val expression = collection.expression ?: return query.copy(collection = collection.id.toString())
+        if (collection.id in visited || visited.size >= 8)
+            return query.copy(invalid = query.invalid + "Circular saved query")
+        val child = resolveQuery(UnifiedQuery.parse(expression), visited + collection.id)
+        return query.copy(collection = null).intersect(child)
+    }
+
+    @Synchronized
+    fun updateCollection(id: Long, name: String, expression: String?) {
+        val clean = name.trim().take(80)
+        require(clean.isNotEmpty()) { "Collection needs a name" }
+        validateExpression(expression)
+        val values = ContentValues().apply {
+            put("name", clean); put("expression", expression?.trim()?.takeIf { it.isNotEmpty() })
+        }
+        writableDatabase.update("collections", values, "id=?", arrayOf(id.toString()))
+        changed()
     }
 
     fun collectionEntries(collection: CatalogCollection): List<CatalogEntry> = if (collection.expression != null) {
         search(collection.expression, 250)
     } else search("in:${collection.id} sort:manual", 250)
 
-    /** Portable user layer only. Never exports PFP ROMs, progress or private files. */
+    /** References preserve tags/memberships even when the original source is not mounted yet. */
     @Synchronized
     fun exportUserLayer(): String {
         val db = readableDatabase
-        val json = JSONObject().put("format", 1)
         fun table(name: String, cols: List<String>, where: String = "1=1"): JSONArray {
             val items = JSONArray()
-            val columnSql = cols.joinToString(",")
-            db.rawQuery("SELECT $columnSql FROM $name WHERE $where", null).use { c ->
+            db.rawQuery("SELECT ${cols.joinToString(",")} FROM $name WHERE $where", null).use { c ->
                 while (c.moveToNext()) {
                     val row = JSONObject()
                     for (i in cols.indices) {
-                        val key = cols[i]
-                        if (c.isNull(i)) row.put(key, JSONObject.NULL)
-                        else if (c.getType(i) == android.database.Cursor.FIELD_TYPE_INTEGER)
-                            row.put(key, c.getLong(i))
-                        else row.put(key, c.getString(i))
+                        row.put(cols[i], if (c.isNull(i)) JSONObject.NULL
+                            else if (c.getType(i) == android.database.Cursor.FIELD_TYPE_INTEGER) c.getLong(i)
+                            else c.getString(i))
                     }
                     items.put(row)
                 }
             }
             return items
         }
-        json.put("custom_records", table("records",
-            listOf("key", "kind", "title", "subtitle", "target", "source"), "source='user'"))
-        json.put("metadata", table("metadata", listOf("key", "alias", "favorite", "pinned", "manual_order", "last_opened", "note")))
-        json.put("tags", table("tags", listOf("key", "tag")))
-        json.put("collections", table("collections", listOf("id", "name", "expression")))
-        json.put("memberships", table("memberships", listOf("collection_id", "key", "position")))
-        return json.toString(2)
+        val identity = listOf("key", "kind", "title", "subtitle", "target", "source", "artwork")
+        return JSONObject().put("format", 2)
+            .put("custom_records", table("records", identity, "source='user'"))
+            .put("references", table("records", identity, """key IN (SELECT key FROM metadata
+                UNION SELECT key FROM tags UNION SELECT key FROM memberships) AND source<>'user'"""))
+            .put("metadata", table("metadata", listOf("key", "alias", "favorite", "pinned", "manual_order", "last_opened", "note")))
+            .put("tags", table("tags", listOf("key", "tag")))
+            .put("collections", table("collections", listOf("id", "name", "expression")))
+            .put("memberships", table("memberships", listOf("collection_id", "key", "position")))
+            .put("roots", table("roots", listOf("uri", "label"))).toString(2)
     }
 
-    /** Atomic restore, merges collections by name. Command shortcuts never execute on import. */
+    /** A validated, transactional merge. Importing a command never launches it. */
     @Synchronized
     fun importUserLayer(raw: String) {
         require(raw.length <= 5_000_000) { "Backup too large" }
         val json = JSONObject(raw)
-        require(json.optInt("format") == 1) { "Unknown backup format" }
+        require(json.optInt("format") in 1..2) { "Unknown backup format" }
         val db = writableDatabase
         val now = System.currentTimeMillis()
         val oldToNew = mutableMapOf<Long, Long>()
+        fun rows(name: String, max: Int): JSONArray = (json.optJSONArray(name) ?: JSONArray()).also {
+            require(it.length() <= max) { "Too many $name in backup" }
+        }
+        fun key(obj: JSONObject): String = obj.getString("key").also {
+            require(it.length in 1..4096 && ':' in it) { "Invalid item identity" }
+        }
+        fun ensureReference(id: String) {
+            if (get(id) == null) upsert(db, CatalogEntry(id, "FILE", "Unlinked source",
+                "Reconnect the original app, game or folder", "", "import", true), now)
+        }
         db.beginTransaction()
         try {
-            val records = json.optJSONArray("custom_records") ?: JSONArray()
-            require(records.length() <= 3000)
-            for (i in 0 until records.length()) {
-                val obj = records.getJSONObject(i)
-                val key = obj.getString("key").take(160)
-                val kind = obj.getString("kind")
-                if (!key.startsWith("user:") || kind !in setOf("LINK", "COMMAND")) continue
-                val target = obj.getString("target").take(2048)
-                if (kind == "LINK" && !target.startsWith("https://") && !target.startsWith("http://")) continue
-                upsert(db, CatalogEntry(key, kind, obj.getString("title").take(120),
-                    obj.optString("subtitle").take(200), target, "user"), now)
+            val custom = rows("custom_records", 3000)
+            for (i in 0 until custom.length()) {
+                val o = custom.getJSONObject(i)
+                val id = key(o)
+                val kind = o.getString("kind")
+                require(id.startsWith("user:") && kind in setOf("LINK", "COMMAND")) { "Invalid custom shortcut" }
+                val title = o.getString("title")
+                val target = o.getString("target")
+                validateCustom(kind, title, target)
+                val existing = get(id)
+                require(existing == null || existing.source == "user") { "Conflicting shortcut identity" }
+                upsert(db, CatalogEntry(id, kind, title, o.optString("subtitle").take(200), target, "user"), now)
             }
-            val metas = json.optJSONArray("metadata") ?: JSONArray()
-            require(metas.length() <= 250000)
+            val refs = rows("references", 50000)
+            for (i in 0 until refs.length()) {
+                val o = refs.getJSONObject(i)
+                val id = key(o)
+                val kind = o.optString("kind", "FILE")
+                require(kind in UnifiedQuery.validKinds && !id.startsWith("user:")) { "Invalid source reference" }
+                if (get(id) == null) upsert(db, CatalogEntry(id, kind, o.optString("title", "Unlinked source").take(120),
+                    "Reconnect its original source", "", "import", true), now)
+            }
+            val metas = rows("metadata", 50000)
             for (i in 0 until metas.length()) {
                 val o = metas.getJSONObject(i)
-                val key = o.getString("key")
-                if (get(key) == null) {
-                    upsert(db, CatalogEntry(key, "FILE", "Unlinked source", "Relink to restore",
-                        "", "import", true), now)
-                }
-                db.execSQL("INSERT OR IGNORE INTO metadata(key) VALUES (?)", arrayOf(key))
+                val id = key(o)
+                ensureReference(id)
+                makeMetadata(id)
                 val v = ContentValues().apply {
                     put("alias", if (o.isNull("alias")) null else o.optString("alias").take(120))
-                    put("favorite", o.optInt("favorite", 0))
-                    put("pinned", o.optInt("pinned", 0))
-                    put("manual_order", o.optInt("manual_order", 0))
-                    put("last_opened", o.optLong("last_opened", 0))
+                    put("favorite", flag(o.optInt("favorite") != 0))
+                    put("pinned", flag(o.optInt("pinned") != 0))
+                    put("manual_order", o.optInt("manual_order"))
+                    put("last_opened", o.optLong("last_opened").coerceAtLeast(0))
                     put("note", o.optString("note").take(4000))
                 }
-                db.update("metadata", v, "key=?", arrayOf(key))
-                // Restore alias searchability immediately, including imported custom shortcuts.
-                db.execSQL("DELETE FROM record_fts WHERE key=?", arrayOf(key))
+                db.update("metadata", v, "key=?", arrayOf(id))
+                db.execSQL("DELETE FROM record_fts WHERE key=?", arrayOf(id))
                 db.execSQL("""INSERT INTO record_fts(key,title,subtitle)
                     SELECT r.key,r.title,r.subtitle || ' ' || COALESCE(m.alias,'')
-                    FROM records r LEFT JOIN metadata m ON m.key=r.key WHERE r.key=?""",
-                    arrayOf(key))
+                    FROM records r LEFT JOIN metadata m ON m.key=r.key WHERE r.key=?""", arrayOf(id))
             }
-            val tags = json.optJSONArray("tags") ?: JSONArray()
-            require(tags.length() <= 300000)
+            val tags = rows("tags", 100000)
             for (i in 0 until tags.length()) {
                 val o = tags.getJSONObject(i)
-                val key = o.getString("key")
-                if (get(key) == null) continue
-                db.execSQL("INSERT OR IGNORE INTO tags(key,tag) VALUES(?,?)",
-                    arrayOf(key, UnifiedQuery.normalizeTag(o.getString("tag"))))
+                val id = key(o)
+                ensureReference(id)
+                val tag = UnifiedQuery.normalizeTag(o.getString("tag"))
+                if (tag.isNotEmpty()) db.execSQL("INSERT OR IGNORE INTO tags(key,tag) VALUES(?,?)", arrayOf(id, tag))
             }
-            val col = json.optJSONArray("collections") ?: JSONArray()
-            require(col.length() <= 3000)
-            for (i in 0 until col.length()) {
-                val o = col.getJSONObject(i)
+            val cols = rows("collections", 3000)
+            for (i in 0 until cols.length()) {
+                val o = cols.getJSONObject(i)
                 val name = o.getString("name").trim().take(80)
-                if (name.isBlank()) continue
-                val v = ContentValues().apply {
-                    put("name", name)
-                    put("expression", if (o.isNull("expression")) null else o.optString("expression").take(512))
-                }
+                require(name.isNotBlank()) { "Collection needs a name" }
+                val expr = if (o.isNull("expression")) null else o.optString("expression").take(512).ifBlank { null }
+                validateExpression(expr)
+                val v = ContentValues().apply { put("name", name); put("expression", expr) }
                 db.insertWithOnConflict("collections", null, v, SQLiteDatabase.CONFLICT_IGNORE)
-                db.rawQuery("SELECT id FROM collections WHERE name=? COLLATE NOCASE", arrayOf(name)).use { c ->
-                    if (c.moveToFirst()) oldToNew[o.getLong("id")] = c.getLong(0)
+                db.rawQuery("SELECT id FROM collections WHERE name=? COLLATE NOCASE", arrayOf(name)).use {
+                    if (it.moveToFirst()) oldToNew[o.getLong("id")] = it.getLong(0)
                 }
             }
-            val mem = json.optJSONArray("memberships") ?: JSONArray()
-            require(mem.length() <= 300000)
-            for (i in 0 until mem.length()) {
-                val o = mem.getJSONObject(i)
-                val id = oldToNew[o.getLong("collection_id")] ?: continue
-                val key = o.getString("key")
-                if (get(key) == null) continue
+            val members = rows("memberships", 100000)
+            for (i in 0 until members.length()) {
+                val o = members.getJSONObject(i)
+                val id = oldToNew[o.getLong("collection_id")] ?: error("Collection reference missing")
+                val item = key(o)
+                ensureReference(item)
                 db.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key,position) VALUES(?,?,?)",
-                    arrayOf<Any?>(id, key, o.optInt("position", 0)))
+                    arrayOf<Any?>(id, item, o.optInt("position").coerceAtLeast(0)))
+            }
+            val roots = rows("roots", 100)
+            for (i in 0 until roots.length()) {
+                val o = roots.getJSONObject(i)
+                val uri = Uri.parse(o.getString("uri"))
+                require(uri.scheme == "content" && android.provider.DocumentsContract.isTreeUri(uri)) { "Invalid folder reference" }
+                val v = ContentValues().apply {
+                    put("uri", uri.toString()); put("label", o.optString("label", "Folder").take(120))
+                    put("status", "Reconnect folder permission")
+                }
+                db.insertWithOnConflict("roots", null, v, SQLiteDatabase.CONFLICT_IGNORE)
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        changed()
     }
+
+    fun queryErrors(raw: String): List<String> = resolveQuery(UnifiedQuery.parse(raw)).invalid
 
     @Synchronized
     fun addCustom(kind: String, title: String, target: String): String {
-        require(kind in setOf("LINK", "COMMAND")) { "Unsupported custom item kind" }
-        require(title.isNotBlank() && title.length <= 120) { "Invalid title" }
-        require(target.isNotBlank() && target.length <= 2048) { "Invalid target" }
-        if (kind == "LINK") require(target.startsWith("https://") || target.startsWith("http://"))
+        validateCustom(kind, title, target)
         val key = "user:${java.util.UUID.randomUUID()}"
         val db = writableDatabase
         db.beginTransaction()
@@ -618,6 +707,79 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
                 System.currentTimeMillis())
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        changed()
         return key
+    }
+
+    @Synchronized
+    fun updateCustom(key: String, title: String, target: String) {
+        val old = get(key) ?: error("Shortcut no longer exists")
+        require(old.source == "user" && old.kind in setOf("LINK", "COMMAND"))
+        validateCustom(old.kind, title, target)
+        upsert(writableDatabase, old.copy(title = title.trim(), target = target), System.currentTimeMillis())
+        changed()
+    }
+
+    @Synchronized
+    fun deleteCustom(key: String) {
+        require(get(key)?.source == "user") { "Only your custom shortcuts can be removed here" }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM record_fts WHERE key=?", arrayOf(key))
+            db.delete("records", "key=? AND source='user'", arrayOf(key))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed()
+    }
+
+    @Synchronized
+    fun removeRoot(uri: String) {
+        writableDatabase.delete("roots", "uri=?", arrayOf(uri))
+        writableDatabase.execSQL("UPDATE records SET missing=1 WHERE source=?", arrayOf("saf:$uri"))
+        changed()
+    }
+
+    @Synchronized
+    fun renamedDocument(before: String, document: WorkspaceDocument, parent: String?) {
+        val oldKey = "file:$before"
+        val newKey = "file:${document.uri}"
+        val previous = get(oldKey) ?: return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            upsert(db, previous.copy(key = newKey, title = document.name, target = document.uri.toString(),
+                missing = false, parentUri = parent), System.currentTimeMillis())
+            if (oldKey != newKey) {
+                db.execSQL("""INSERT OR IGNORE INTO metadata(key,alias,favorite,pinned,manual_order,last_opened,note)
+                    SELECT ?,alias,favorite,pinned,manual_order,last_opened,note FROM metadata WHERE key=?""", arrayOf(newKey, oldKey))
+                db.execSQL("INSERT OR IGNORE INTO tags(key,tag) SELECT ?,tag FROM tags WHERE key=?", arrayOf(newKey, oldKey))
+                db.execSQL("""INSERT OR IGNORE INTO memberships(collection_id,key,position)
+                    SELECT collection_id,?,position FROM memberships WHERE key=?""", arrayOf(newKey, oldKey))
+                db.execSQL("DELETE FROM record_fts WHERE key=?", arrayOf(oldKey))
+                db.delete("records", "key=?", arrayOf(oldKey))
+            }
+            rename(newKey, previous.alias)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed()
+    }
+
+    fun stats(): Map<String, Int> {
+        val result = linkedMapOf<String, Int>()
+        readableDatabase.rawQuery("SELECT kind,COUNT(*) FROM records WHERE missing=0 GROUP BY kind", null).use {
+            while (it.moveToNext()) result[it.getString(0)] = it.getInt(1)
+        }
+        return result
+    }
+
+    private fun validateCustom(kind: String, title: String, target: String) {
+        require(kind in setOf("LINK", "COMMAND")) { "Unsupported shortcut type" }
+        require(title.isNotBlank() && title.length <= 120) { "Enter a name up to 120 characters" }
+        require(target.isNotBlank() && target.length <= 2048) { "Enter a target up to 2048 characters" }
+        if (kind == "LINK") {
+            val uri = Uri.parse(target)
+            require(uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank()) { "Enter a complete https:// or http:// URL" }
+        }
     }
 }

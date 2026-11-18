@@ -19,6 +19,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,12 +35,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,10 +66,17 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.documentfile.provider.DocumentFile
 import com.playfieldportal.core.ui.sound.MenuSound
 import com.playfieldportal.core.domain.model.Game
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -100,7 +113,6 @@ private data class Panel(
     val order: Int = 0
 )
 
-private data class AppEntry(val label: String, val packageName: String)
 
 private val Ink = Color(0xE811203D)
 private val Ice = Color(0xFFCAE8FF)
@@ -110,16 +122,17 @@ private val Tab = Color(0xEE152C4B)
 
 private fun loadPanels(context: Context): List<Panel> {
     return runCatching {
-        val array = JSONArray(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
-            .getString("panels", "[]"))
-        (0 until array.length()).mapNotNull { i ->
+        val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
+        val density = if (prefs.getString("panel_units", "px") == "dp") 1f else context.resources.displayMetrics.density
+        val array = JSONArray(prefs.getString("panels", "[]"))
+        (0 until array.length().coerceAtMost(32)).mapNotNull { i ->
             val item = array.getJSONObject(i)
             val tool = runCatching { Tool.valueOf(item.getString("tool")) }.getOrNull()
                 ?: return@mapNotNull null
             Panel(
                 id = item.getInt("id"), tool = tool,
-                x = item.optDouble("x", 40.0).toFloat(),
-                y = item.optDouble("y", 70.0).toFloat(),
+                x = (item.optDouble("x", 40.0).toFloat() / density).takeIf { it.isFinite() } ?: 40f,
+                y = (item.optDouble("y", 70.0).toFloat() / density).takeIf { it.isFinite() } ?: 70f,
                 widthDp = item.optDouble("w", 390.0).toFloat().coerceIn(260f, 900f),
                 heightDp = item.optDouble("h", 305.0).toFloat().coerceIn(180f, 700f),
                 minimized = item.optBoolean("min", false),
@@ -141,7 +154,7 @@ private fun savePanels(context: Context, panels: List<Panel>) {
         })
     }
     context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
-        .edit().putString("panels", array.toString()).apply()
+        .edit().putString("panels", array.toString()).putString("panel_units", "dp").apply()
 }
 
 private fun openSystem(context: Context, action: String) {
@@ -149,11 +162,6 @@ private fun openSystem(context: Context, action: String) {
         .onFailure {
             context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
-}
-
-private fun openApp(context: Context, packageName: String) {
-    val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return
-    runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
 @Composable
@@ -170,34 +178,58 @@ fun XmbWorkspaceOverlay(
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
-    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
     val panels = remember { mutableStateListOf<Panel>().apply {
         val saved = loadPanels(context)
-        addAll(if (saved.isEmpty()) listOf(Panel(1, Tool.SEARCH, 52f, 76f)) else saved)
+        val firstLaunch = !context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).contains("panels")
+        addAll(if (firstLaunch) listOf(Panel(1, Tool.SEARCH, 12f, 64f, maximized = configuration.screenWidthDp < 600)) else saved)
     } }
     var nextId by remember { mutableStateOf((panels.maxOfOrNull { it.id } ?: 0) + 1) }
     var topOrder by remember { mutableStateOf((panels.maxOfOrNull { it.order } ?: 0) + 1) }
     var queuedCommand by remember { mutableStateOf<String?>(null) }
-    val catalog = remember { UnifiedCatalog(context) }
+    var commandRequest by remember { mutableStateOf(0) }
+    var fileLocation by remember { mutableStateOf<String?>(null) }
+    var fileRequest by remember { mutableStateOf(0) }
+    val catalog = remember { UnifiedCatalog.shared(context) }
     var catalogRevision by remember { mutableStateOf(0) }
     var catalogError by remember { mutableStateOf<String?>(null) }
     // Index once per real source update, not once per window (Search/Library/Collections
     // may all be visible simultaneously). The underlying PFP database is never modified.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeRevision by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycleOwner, catalog) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumeRevision++ }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     LaunchedEffect(games) {
         val snapshot = games ?: return@LaunchedEffect
-        runCatching { withContext(Dispatchers.IO) { catalog.syncPfpGames(snapshot) } }
-            .onSuccess { catalogRevision++ }
+        workspaceResult { withContext(Dispatchers.IO) { catalog.syncPfpGames(snapshot) } }
+            .onSuccess { catalogRevision++; catalogError = null }
             .onFailure { catalogError = "Game indexing failed: ${it.message}" }
     }
-    LaunchedEffect(Unit) {
-        runCatching {
+    LaunchedEffect(resumeRevision) {
+        workspaceResult {
             withContext(Dispatchers.IO) {
                 catalog.syncAndroidApps()
                 catalog.syncSystemTools()
             }
-        }.onSuccess { catalogRevision++ }
+        }.onSuccess { catalogRevision++; catalogError = null }
             .onFailure { catalogError = "App indexing failed: ${it.message}" }
+    }
+
+    DisposableEffect(context) {
+        val pref = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "restore_epoch") {
+                panels.clear(); panels.addAll(loadPanels(context))
+                nextId = (panels.maxOfOrNull { it.id } ?: 0) + 1
+                topOrder = (panels.maxOfOrNull { it.order } ?: 0) + 1
+            }
+        }
+        pref.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { pref.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     // A short debounce keeps window dragging from writing flash storage every frame.
@@ -218,12 +250,18 @@ fun XmbWorkspaceOverlay(
             update(old.id) { it.copy(minimized = false, order = topOrder++) }
         } else {
             val stagger = (panels.size % 5) * 23f
-            panels.add(Panel(nextId++, tool, 42f + stagger, 65f + stagger, order = topOrder++))
+            panels.add(Panel(nextId++, tool, 12f + stagger, 64f + stagger, maximized = configuration.screenWidthDp < 600, order = topOrder++))
         }
         onSound(MenuSound.SELECT)
     }
 
-    Box(modifier.fillMaxSize()) {
+    MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = Color(0xFF081C30),
+        surface = Color(0xFF172F4A), onSurface = Ice, background = Ink, onBackground = Ice)) {
+    BoxWithConstraints(modifier.fillMaxSize().zIndex(10000f)) {
+        val viewportWidth = maxWidth.value
+        val viewportHeight = maxHeight.value
+        val screenWidthPx = with(density) { maxWidth.toPx() }
+        val screenHeightPx = with(density) { maxHeight.toPx() }
         // The always-visible grip gives touch users a reliable entry without overriding PFP's
         // Start/Select mappings, boot visuals, navigation, or its own categories.
         Box(
@@ -231,6 +269,7 @@ fun XmbWorkspaceOverlay(
                 .clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))
                 .background(Tab)
                 .border(1.dp, Line, RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))
+                .semantics { contentDescription = if (expanded) "Close ArcDeck workspace" else "Open ArcDeck workspace" }
                 .clickable { onSound(MenuSound.SELECT); onToggle() }
                 .padding(horizontal = 11.dp, vertical = 17.dp)
         ) { Text(if (expanded) "‹" else "WS", color = Ice, fontWeight = FontWeight.Bold) }
@@ -252,7 +291,7 @@ fun XmbWorkspaceOverlay(
                     Tool.entries.forEach { tool ->
                         Text(
                             "${tool.symbol} ${tool.title}",
-                            Modifier.clip(RoundedCornerShape(14.dp))
+                            Modifier.testTag("workspace-tool-${tool.name}").clip(RoundedCornerShape(14.dp))
                                 .clickable { activate(tool) }
                                 .padding(horizontal = 9.dp, vertical = 7.dp),
                             color = Ice, fontSize = 12.sp
@@ -264,16 +303,18 @@ fun XmbWorkspaceOverlay(
 
                 panels.sortedBy { it.order }.forEach { panel ->
                     if (!panel.minimized) {
-                        val widthDp = min(panel.widthDp, configuration.screenWidthDp.toFloat() - 18f)
+                        val widthDp = min(panel.widthDp, viewportWidth - 18f)
                             .coerceAtLeast(220f)
-                        val heightDp = min(panel.heightDp, configuration.screenHeightDp.toFloat() - 70f)
+                        val heightDp = min(panel.heightDp, viewportHeight - 110f)
                             .coerceAtLeast(160f)
                         val actualWidth = with(density) { widthDp.dp.toPx() }
                         val actualHeight = with(density) { heightDp.dp.toPx() }
-                        val x = if (panel.maximized) 0f else panel.x.coerceIn(0f, max(0f, screenWidthPx - actualWidth))
-                        val y = if (panel.maximized) 50f else panel.y.coerceIn(0f, max(0f, screenHeightPx - actualHeight))
-                        val drawWidth = if (panel.maximized) configuration.screenWidthDp.dp else widthDp.dp
-                        val drawHeight = if (panel.maximized) (configuration.screenHeightDp - 52).dp else heightDp.dp
+                        val top = with(density) { 54.dp.toPx() }
+                        val bottom = with(density) { 45.dp.toPx() }
+                        val x = if (panel.maximized) 0f else with(density) { panel.x.dp.toPx() }.coerceIn(0f, max(0f, screenWidthPx - actualWidth))
+                        val y = if (panel.maximized) top else with(density) { panel.y.dp.toPx() }.coerceIn(top, max(top, screenHeightPx - actualHeight - bottom))
+                        val drawWidth = if (panel.maximized) viewportWidth.dp else widthDp.dp
+                        val drawHeight = if (panel.maximized) (viewportHeight - 100f).coerceAtLeast(120f).dp else heightDp.dp
 
                         Column(
                             Modifier.zIndex(1f + panel.order)
@@ -291,8 +332,8 @@ fun XmbWorkspaceOverlay(
                                         if (!panel.maximized) detectDragGestures { change, delta ->
                                             change.consume()
                                             update(panel.id) { p -> p.copy(
-                                                x = (p.x + delta.x).coerceIn(0f, max(0f, screenWidthPx - actualWidth)),
-                                                y = (p.y + delta.y).coerceIn(0f, max(0f, screenHeightPx - actualHeight))
+                                                x = (p.x + with(density) { delta.x.toDp().value }).coerceIn(0f, max(0f, viewportWidth - widthDp)),
+                                                y = (p.y + with(density) { delta.y.toDp().value }).coerceIn(54f, max(54f, viewportHeight - heightDp - 45f))
                                             ) }
                                         }
                                     }
@@ -322,18 +363,28 @@ fun XmbWorkspaceOverlay(
                                         onSetPfpFavorite = onSetPfpFavorite,
                                         onRunCommand = { command ->
                                             queuedCommand = command
+                                            commandRequest++
                                             activate(Tool.TERMINAL)
+                                        },
+                                        onBrowseFolder = { uri ->
+                                            fileLocation = uri; fileRequest++; activate(Tool.FILES)
                                         },
                                         onOpenWorkspaceTool = { id ->
                                             val tool = Tool.entries.firstOrNull { it.name.equals(id, true) }
                                             if (tool != null) activate(tool)
                                         },
                                     )
-                                    Tool.FILES -> FileTool()
-                                    Tool.APPS -> AppsTool()
-                                    Tool.TERMINAL -> TerminalTool(queuedCommand)
-                                    Tool.NOTES -> NotesTool()
-                                    Tool.SYSTEM -> SystemTool(onClose)
+                                    Tool.FILES -> WorkspaceFilesPane(catalog, fileLocation, onOpenPfpGame, fileRequest)
+                                    Tool.APPS -> UnifiedLibraryPane(catalog, catalogRevision, catalogError, false,
+                                        onOpenPfpGame, onSetPfpFavorite, { queuedCommand = it; commandRequest++; activate(Tool.TERMINAL) },
+                                        { id -> Tool.entries.firstOrNull { it.name.equals(id, true) }?.let { activate(it) } },
+                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, initialQuery = "type:app")
+                                    Tool.TERMINAL -> WorkspaceTerminalPane(queuedCommand, commandRequest)
+                                    Tool.NOTES -> WorkspaceNotesPane()
+                                    Tool.SYSTEM -> SystemTool(onClose) {
+                                        panels.clear()
+                                        panels.add(Panel(nextId++, Tool.SEARCH, 12f, 64f, maximized = configuration.screenWidthDp < 600))
+                                    }
                                 }
                             }
                             if (!panel.maximized) {
@@ -344,9 +395,9 @@ fun XmbWorkspaceOverlay(
                                                 change.consume()
                                                 update(panel.id) { p ->
                                                     p.copy(widthDp = (p.widthDp + with(density) { delta.x.toDp().value })
-                                                        .coerceIn(260f, configuration.screenWidthDp.toFloat() - 12f),
+                                                        .coerceIn(220f, max(220f, viewportWidth - 12f)),
                                                         heightDp = (p.heightDp + with(density) { delta.y.toDp().value })
-                                                        .coerceIn(180f, configuration.screenHeightDp.toFloat() - 65f))
+                                                        .coerceIn(160f, max(160f, viewportHeight - 100f)))
                                                 }
                                             }
                                         }.clickable { }
@@ -377,198 +428,46 @@ fun XmbWorkspaceOverlay(
             }
         }
     }
+    }
 }
 
 @Composable
 private fun FrameControl(label: String, onClick: () -> Unit) {
-    Text(label, Modifier.clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 9.dp),
+    Text(label, Modifier.semantics { contentDescription = when (label) { "—" -> "Minimize window"; "×" -> "Close window"; else -> "Toggle window size" } }
+        .clickable(onClick = onClick).padding(horizontal = 9.dp, vertical = 9.dp),
         color = Ice, fontSize = 16.sp)
 }
 
 @Composable
-private fun SearchTool(onOpen: (Tool) -> Unit) {
-    val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
-    var installed by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        installed = withContext(Dispatchers.IO) { getApps(context) }
-    }
-    Column {
-        OutlinedTextField(query, { query = it }, label = { Text("Search apps, tools, commands") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        val commands = Tool.entries.filter { it.title.contains(query, true) }
-        val apps = installed.filter {
-            query.isNotBlank() && (it.label.contains(query, true) || it.packageName.contains(query, true))
-        }.take(30)
-        LazyColumn {
-            items(commands) { tool -> ListAction("${tool.symbol}  ${tool.title}") { onOpen(tool) } }
-            items(apps) { app -> ListAction("▦  ${app.label}") { openApp(context, app.packageName) } }
-        }
-    }
-}
-
-private fun getApps(context: Context): List<AppEntry> = runCatching {
-    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    @Suppress("DEPRECATION")
-    context.packageManager.queryIntentActivities(intent, 0)
-        .map { AppEntry(it.loadLabel(context.packageManager).toString(), it.activityInfo.packageName) }
-        .distinctBy { it.packageName }
-        .sortedBy { it.label.lowercase() }
-}.getOrDefault(emptyList())
-
-@Composable
-private fun AppsTool() {
-    val context = LocalContext.current
-    var filter by remember { mutableStateOf("") }
-    var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
-    LaunchedEffect(Unit) { apps = withContext(Dispatchers.IO) { getApps(context) } }
-    Column {
-        OutlinedTextField(filter, { filter = it }, label = { Text("Find installed applications") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        LazyColumn {
-            items(apps.filter { it.label.contains(filter, true) || it.packageName.contains(filter, true) }) { app ->
-                ListAction("${app.label}   ·   ${app.packageName}") { openApp(context, app.packageName) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileTool() {
+private fun SystemTool(onClose: () -> Unit, onReset: () -> Unit) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
-    var rootUri by remember { mutableStateOf(preferences.getString("file_tree", null)) }
-    val history = remember { mutableStateListOf<DocumentFile>() }
-    var files by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            rootUri = uri.toString()
-            preferences.edit().putString("file_tree", rootUri).apply()
-        }
-    }
-    LaunchedEffect(rootUri) {
-        history.clear()
-        rootUri?.let { uri ->
-            runCatching { DocumentFile.fromTreeUri(context, Uri.parse(uri)) }
-                .getOrNull()?.let { history.add(it) }
-        }
-    }
-    val current = history.lastOrNull()
-    LaunchedEffect(current?.uri) {
-        loading = true
-        files = withContext(Dispatchers.IO) {
-            runCatching { current?.listFiles()?.sortedWith(
-                compareBy<DocumentFile> { !it.isDirectory }.thenBy { it.name?.lowercase() }
-            ) ?: emptyList() }.getOrDefault(emptyList())
-        }
-        loading = false
-    }
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { picker.launch(null) }) { Text("Choose folder") }
-            if (history.size > 1) TextButton(onClick = { history.removeAt(history.lastIndex) }) { Text("Back") }
-        }
-        Text(current?.name ?: "No folder selected", fontSize = 12.sp, color = Ice,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (loading) Text("Reading folder...", color = Accent)
-        LazyColumn {
-            items(files, key = { it.uri.toString() }) { file ->
-                ListAction((if (file.isDirectory) "▣  " else "◈  ") + (file.name ?: "Unnamed")) {
-                    if (file.isDirectory) {
-                        history.add(file)
-                    } else {
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(file.uri, file.type ?: "application/octet-stream")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        runCatching { context.startActivity(intent) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotesTool() {
-    val context = LocalContext.current
-    val pref = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
-    var text by remember { mutableStateOf(pref.getString("notes", "") ?: "") }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedTextField(text, { text = it }, label = { Text("Workspace notes") },
-            modifier = Modifier.fillMaxWidth().weight(1f), maxLines = 50)
-        Button(onClick = { pref.edit().putString("notes", text).apply() }) { Text("Save notes") }
-    }
-}
-
-@Composable
-private fun TerminalTool(initialCommand: String? = null) {
-    val context = LocalContext.current
-    var command by remember { mutableStateOf("") }
-    LaunchedEffect(initialCommand) { if (initialCommand != null) command = initialCommand }
-    var confirm by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Run your commands through Termux. Permission and Termux settings required.") }
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text("TERMUX / BASH", fontWeight = FontWeight.Bold, color = Accent)
-        OutlinedTextField(command, { command = it }, label = { Text("Shell command") },
-            modifier = Modifier.fillMaxWidth(), maxLines = 3)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { if (command.isNotBlank()) confirm = true }) { Text("Review & run") }
-            TextButton(onClick = { openApp(context, "com.termux") }) { Text("Open Termux") }
-        }
-        Text(status, fontSize = 12.sp, color = Ice)
-        Text("Commands execute in Termux, not inside this window. Never paste commands you don't trust.",
-            fontSize = 11.sp, color = Color.LightGray)
-    }
-    if (confirm) {
-        AlertDialog(
-            onDismissRequest = { confirm = false },
-            title = { Text("Run in Termux?") },
-            text = { Text("This command runs with your Termux permissions:\n\n$command") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val result = runTermux(context, command)
-                    status = result
-                    confirm = false
-                }) { Text("Run") }
-            },
-            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
-        )
-    }
-}
-
-private fun runTermux(context: Context, command: String): String {
-    if (command.isBlank()) return "Empty command."
-    val permission = "com.termux.permission.RUN_COMMAND"
-    if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-        return "Permission not granted. Android Settings → Apps → Play Field Portal → Permissions → Additional permissions → Run commands in Termux. Then enable allow-external-apps in Termux."
-    }
-    val intent = Intent("com.termux.RUN_COMMAND").apply {
-        setClassName("com.termux", "com.termux.app.RunCommandService")
-        putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
-        putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", command))
-        putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
-        putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
-        putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0")
-    }
-    return runCatching { context.startService(intent); "Command sent to Termux. See its session for output." }
-        .getOrElse { "Couldn't start Termux: ${it.message ?: it.javaClass.simpleName}" }
-}
-
-@Composable
-private fun SystemTool(onClose: () -> Unit) {
-    val context = LocalContext.current
+    var shortcut by remember { mutableStateOf(preferences.getInt("workspace_key", android.view.KeyEvent.KEYCODE_F10)) }
+    var landscape by remember { mutableStateOf(preferences.getBoolean("landscape_prompt", false)) }
+    var editShortcut by remember { mutableStateOf(false) }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ListAction("⚙  Android settings") { openSystem(context, Settings.ACTION_SETTINGS) }
         ListAction("⌂  Change default home app") { openSystem(context, Settings.ACTION_HOME_SETTINGS) }
         ListAction("▣  File manager") { openSystem(context, Settings.ACTION_INTERNAL_STORAGE_SETTINGS) }
         ListAction("▤  Wi-Fi settings") { openSystem(context, Settings.ACTION_WIFI_SETTINGS) }
         ListAction("◉  Bluetooth settings") { openSystem(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
+        ListAction("⌨  Workspace shortcut: ${android.view.KeyEvent.keyCodeToString(shortcut).removePrefix("KEYCODE_")}") { editShortcut = true }
+        ListAction("▣  Landscape reminder: ${if (landscape) "on" else "off"}") {
+            landscape = !landscape; preferences.edit().putBoolean("landscape_prompt", landscape).apply()
+        }
+        ListAction("▦  Reset window layout") { onReset() }
+        Text("ArcDeck Workspace 1.0 · Touch WS or use your selected shortcut. Use Library → Collections for backup and storage roots.",
+            color = Ice, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
         ListAction("✕  Close workspace") { onClose() }
     }
+    if (editShortcut) AlertDialog(onDismissRequest = { editShortcut = false }, title = { Text("Workspace shortcut") },
+        text = { Column {
+            listOf("F10" to android.view.KeyEvent.KEYCODE_F10, "Controller Select" to android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
+                "Controller Start" to android.view.KeyEvent.KEYCODE_BUTTON_START, "L3" to android.view.KeyEvent.KEYCODE_BUTTON_THUMBL,
+                "R3" to android.view.KeyEvent.KEYCODE_BUTTON_THUMBR).forEach { (label, code) ->
+                TextButton(onClick = { shortcut = code; preferences.edit().putInt("workspace_key", code).apply(); editShortcut = false }) { Text(label) }
+            }
+        } }, confirmButton = { TextButton(onClick = { editShortcut = false }) { Text("Close") } })
 }
 
 @Composable

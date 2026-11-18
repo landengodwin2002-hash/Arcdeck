@@ -1,44 +1,17 @@
-# Unified library — actual code paths and invariant contract
+# ArcDeck implementation
 
-## Identity and ownership
+PlayFieldPortal's GameRepository remains the game authority. `pfp-game:<id>`, `pfp-shortcut:<id>`, `android:<package>`, exact document URIs, workspace tools and UUID custom shortcuts have stable identities in a separate SQLite catalog. Aliases, tags, favorites for non-game entries, pins and collection membership remain separate from source records.
 
-A search record is identified by `(source, stable key)`, not by its title.
+Schema 2 migrates schema 1 in place, adding artwork and parent-folder references. Source reconciliation uses a transaction-scoped generation counter; complete snapshots mark missing records without deleting organization. Incomplete storage scans retain unvisited records. A failed document-provider query is an error, not an empty directory. Scans are bounded at 12,000 objects and 16 levels and run off the UI thread.
 
-- `pfp-game:<game id>` — PFP GameRepository is authoritative for game existence, favorite, play time, ROM URI, emulator and launch history.
-- `pfp-shortcut:<game id>` — PFP app-shortcut rows, not game ROMs.
-- `android:<package>` — Android installed app package, launched via PackageManager.
-- `file:<content-uri>` — user-approved document-provider object; URIs are opaque, never reconstructed as filesystem paths.
-- `workspace:<tool>` and `tool:<setting>` — searchable internal controls and official Android settings intents.
-- `user:<uuid>` — custom command or website shortcut.
+Search binds SQL values and sanitizes text before FTS4 prefix matching. Pagination ends in a stable identity tie-breaker. Smart-collection references are expanded with AND semantics and guarded against cycles. Exact ROM-URI duplicates are hidden only while their matching game is available. Shared revision notifications refresh every open library pane.
 
-`records` are an **index mirror**. `metadata`, `tags`, `collections` and `memberships` are the only persistent organizational authority. The separate SQLite database is non-destructive to PFP's game database. The PFP object is not duplicated when it appears in several collections.
+Document operations use Android DocumentsContract with user-approved tree grants. Copies snapshot their source first, reject descendant destinations by opaque document identity, stream file content, avoid overwrites and attempt rollback of newly created destinations on failure. Moves remove the source only after successful copying; a failed source removal is reported as a copy. Provider URI changes during rename preserve index organization. Renamed/moved ROMs can need a PlayFieldPortal rescan.
 
-`game_files` links a PFP game to a file that has the *exact same* SAF ROM URI; the default universal search suppresses the duplicate file row. `type:file` still reveals it for file operations. There is deliberately no aggressive filename/size matching that might link two different ROMs to one game.
+Workspace backups version and validate the full catalog user layer plus notes, window layout and preferences. Source references are restored as missing placeholders, preserving organization until sources return. Old catalog-only backups remain accepted. Imports never execute command shortcuts. Catalog changes merge transactionally; file reads and writes are bounded.
 
-## Indexing policy
+Termux execution follows its RUN_COMMAND API. A review captures the exact command; Android permission and Termux's external-app setting remain required. An explicit one-shot mutable PendingIntent delivers results to a non-exported receiver. Exact outstanding nonces associate results with runs; unsolicited or replayed results are ignored. History is bounded to 20 entries and 100 KB of output per entry. Interactive terminal sessions remain in Termux; completed output is shown in ArcDeck.
 
-- PFP `GameRepository.observeAll()` feeds real, non-mutating snapshots (including missing flags); the initial nullable state is ignored until the repository produces its first value.
-- Android apps are populated from PackageManager. An anomalous zero-app discovery cannot mark the entire previous app catalog missing.
-- File scans use breadth-first enumeration with hard depth/item caps (16 levels, 12,000 objects per scan). Scans require persisted SAF read permission and are explicitly initiated by the user.
-- An unreadable, incomplete, or permission-denied scan never mass-deletes or marks unvisited files missing. Complete scans mark missing rather than delete. Tags and collections survive missing sources and remounts.
-- Background file reads/indexing run on `Dispatchers.IO`; the interface can still display its last saved records.
+The workspace is a Compose surface over the existing XMB, with its own dark color scheme and density-independent saved window coordinates. Toolbars scroll on narrow displays, windows maximize by default on phones, portrait access works, and controller workspace binding is selectable. Android apps run as ordinary Android activities. System default-home controls provide the independent recovery route.
 
-## Query grammar
-
-Words are full-text AND prefix matches. `type:game`, `tag:rpg`, `source:android`, `in:1`, `sort:recent`, `sort:name`, `sort:manual`, `is:missing` refine results. Unknown keys become text; unknown values for known keys return empty results (not an accidental broad search). SQL is parameterized; the FTS parser receives only sanitized Unicode letter/digit tokens. Result sets are bounded and can be expanded in increments.
-
-## Collection semantics
-
-- Manual: many-to-many membership with independent per-collection position; moving one shortcut never alters the source object.
-- Smart: a stored query re-evaluated against the latest index; membership is computed, not frozen.
-- Aliases, tags, pinned flags and links are metadata separate from original filenames, game IDs and package labels.
-- PFP games use PFP's own favorite state. Other object favorites are stored in the sidecar.
-- `source_recent` reflects PFP play history; `last_opened` records opening from the new overlay.
-
-## Safety and recovery
-
-All third-party Android apps leave the internal workspace and run as ordinary Android activities. `Termux RUN_COMMAND` requires opt-in permission and a confirmation dialog. No root, shell escalation, other-app data access or hidden terminal execution. `SWITCH HOME` / Android default Home settings remain available. Boot to Motorola launcher remains an independent OS setting. No destructive file operations are implemented by this patch.
-
-## Known limits
-
-A true compiled APK, visual/device tests, and end-to-end PFP launch tests are pending. Title/artwork search currently uses text labels; unified results do not yet render all PFP artwork. Folder search can find a folder but the separate Files tool still relies on its own tree navigation; jumping directly to an arbitrary nested document-provider folder is planned. Android will not let every external app live inside a composited XMB window. Backup restores aliases/collections but does not recreate file grants, ROM files or PFP database history.
+CI tests the actual query parser, Android SQLite helper, schema migration, backup round trips and rollback, source disappearance/return, collection order, ROM deduplication, streamed document copies and failure paths, Termux result association, and Compose phone controls. Release builds disable debugging and the upstream performance overlay and use resource/code shrinking. Final owner-side signing keeps the reusable private identity out of GitHub.
