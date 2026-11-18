@@ -30,6 +30,11 @@ class WorkspaceSpacesTest {
         context.deleteDatabase("arcdeck_unified_v1.db")
         context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit().clear().commit()
         catalog = UnifiedCatalog(context); spaces = WorkspaceSpaces.shared(context)
+        // Robolectric gives each test a new data directory; attach a fresh real provider as Android does per process.
+        val authority = "${context.packageName}.fileprovider"
+        val info = requireNotNull(context.packageManager.resolveContentProvider(authority, android.content.pm.PackageManager.GET_META_DATA))
+        val fileProvider = androidx.core.content.FileProvider(); fileProvider.attachInfo(context, info); fileProvider.onCreate()
+        ShadowContentResolver.registerProviderInternal(authority, fileProvider)
     }
     @After fun cleanup() { catalog.close() }
     @Test fun sharedOrganizationRemainsConsistentAcrossAppSpaces() {

@@ -73,12 +73,16 @@ class WorkspaceComposeTest {
     @Test fun everyWorkspaceToolCanBeReachedOnAPhone() {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
         compose.onNodeWithTag("workspace-tool-SYSTEM").performScrollTo().assertIsDisplayed().performClick()
-        compose.onNodeWithText("⌂  Change default home app").assertExists()
+        compose.waitForIdle()
+        println("System dock bounds: " + compose.onNodeWithTag("workspace-tool-SYSTEM").fetchSemanticsNode().boundsInRoot)
+        println(compose.onRoot().printToString(maxDepth = 8))
         val directory = System.getProperty("arcdeck.screenshot.dir")
         if (directory != null) {
             val file = File(directory, "workspace-phone.png"); file.parentFile!!.mkdirs()
             file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
+        compose.onNodeWithTag("workspace-panel-SYSTEM").assertExists()
+        compose.onNodeWithText("⌂  Change default home app").assertExists()
     }
     @Test fun anInstalledAppCanHaveItsOwnSpaceWithoutDuplicatingItsLibraryRecord() {
         catalog.syncSource("android", listOf(CatalogEntry("android:com.discord", "APP", "Discord", "Installed app", "com.discord", "android")))

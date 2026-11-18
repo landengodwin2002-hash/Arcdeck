@@ -143,8 +143,10 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         private const val CHANNEL = "arcdeck_floating_workspace"
         private const val STOP = "arcdeck.overlay.STOP"
         fun ensureEnabled(context: Context) {
-            if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("overlay_enabled", false) && Settings.canDrawOverlays(context))
-                ContextCompat.startForegroundService(context, Intent(context, WorkspaceOverlayService::class.java))
+            if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("overlay_enabled", false)) {
+                if (Settings.canDrawOverlays(context)) ContextCompat.startForegroundService(context, Intent(context, WorkspaceOverlayService::class.java))
+                else stop(context)
+            }
         }
         fun stop(context: Context) {
             context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit().putBoolean("overlay_enabled", false).apply()

@@ -300,7 +300,7 @@ fun XmbWorkspaceOverlay(
         // The always-visible grip gives touch users a reliable entry without overriding PFP's
         // Start/Select mappings, boot visuals, navigation, or its own categories.
         Box(
-            Modifier.align(Alignment.CenterEnd).zIndex(1000f)
+            Modifier.align(Alignment.CenterEnd).zIndex(1000000f)
                 .clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))
                 .background(Tab)
                 .border(1.dp, Line, RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))
@@ -359,7 +359,7 @@ fun XmbWorkspaceOverlay(
                         val drawHeight = if (panel.maximized) (viewportHeight - 100f).coerceAtLeast(120f).dp else heightDp.dp
 
                         Column(
-                            Modifier.zIndex(1f + panel.order)
+                            Modifier.testTag("workspace-panel-${panel.tool.name}").zIndex(1f + panel.order)
                                 .pointerInput(panel.id) {
                                     awaitEachGesture {
                                         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
