@@ -58,7 +58,8 @@ class WorkspaceSpacesTest {
         catalog.syncSource("saf:$root", listOf(CatalogEntry("file:connected", "FILE", "Scope document", "text/plain", "content://scope.test/document/one", "saf:$root")))
         catalog.syncSource("outside", listOf(CatalogEntry("file:outside", "FILE", "Scope elsewhere", "text/plain", "content://other.test/document/two", "outside")))
         val space = spaces.create("Folder space", "", catalog, "file:$doc")
-        assertEquals("file:connected", spaces.items(space, catalog, "document").single().key)
+        assertEquals(setOf("file:connected", "file:$doc"), spaces.items(space, catalog, "document").map { it.key }.toSet())
+        assertEquals("file:connected", spaces.items(space, catalog, "type:file document").single().key)
         assertFalse(spaces.items(space, catalog, "Scope").any { it.key == "file:outside" })
     }
     @Test fun anExplicitCollectionFilterCannotEscapeTheCurrentSpace() {

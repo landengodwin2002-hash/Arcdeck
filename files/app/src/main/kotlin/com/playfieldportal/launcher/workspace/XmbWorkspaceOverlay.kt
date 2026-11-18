@@ -289,7 +289,8 @@ fun XmbWorkspaceOverlay(
     }
     fun preview(uri: String) { previewUri = uri; activate(Tool.PREVIEW) }
     CompositionLocalProvider(LocalWorkspaceAppearance provides appearance,
-        LocalDensity provides Density(density.density, density.fontScale * appearance.font)) {
+        LocalDensity provides Density(density.density, density.fontScale * appearance.font),
+        androidx.compose.material3.LocalContentColor provides Ice) {
     MaterialTheme(colorScheme = darkColorScheme(primary = appearance.accent, onPrimary = Color(0xFF081C30),
         surface = appearance.surface, onSurface = Ice, background = appearance.ink, onBackground = Ice)) {
     BoxWithConstraints(modifier.fillMaxSize().then(if (nativeBars) Modifier.safeDrawingPadding() else Modifier).imePadding().zIndex(10000f)) {
