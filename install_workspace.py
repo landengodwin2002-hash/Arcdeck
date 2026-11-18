@@ -261,7 +261,7 @@ def plan_install(repo):
         if path.is_file(): result[repo/'app/src/main/res'/path.relative_to(base/'files/app/src/main/res')] = path.read_text()
     for path in sorted((base/'tests/fixtures').glob('*')):
         if path.is_file(): result[repo/'app/src/test/resources'/path.name] = path.read_text()
-    return result, {activity, manifest, gradle, orientation}
+    return result, {activity, manifest, gradle, orientation, paths}
 
 
 def atomic_write(path, data):

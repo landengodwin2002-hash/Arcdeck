@@ -47,6 +47,7 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     override val savedStateRegistry: SavedStateRegistry get() = savedState.savedStateRegistry
     override val viewModelStore = ViewModelStore()
     private lateinit var manager: WindowManager
+    private lateinit var windowContext: Context
     private var bubble: TextView? = null
     private var panel: ComposeView? = null
     private val preferences get() = getSharedPreferences("arcdeck_workspace", MODE_PRIVATE)
@@ -55,7 +56,10 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-        manager = getSystemService(WindowManager::class.java)
+        val display = getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val displayContext = createDisplayContext(display)
+        windowContext = if (Build.VERSION.SDK_INT >= 30) displayContext.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null) else displayContext
+        manager = windowContext.getSystemService(WindowManager::class.java)
     }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -83,7 +87,7 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             x = preferences.getInt("overlay_x", resources.displayMetrics.widthPixels - dp(62)).coerceIn(0, (resources.displayMetrics.widthPixels - dp(54)).coerceAtLeast(0))
             y = preferences.getInt("overlay_y", dp(150)).coerceIn(0, (resources.displayMetrics.heightPixels - dp(80)).coerceAtLeast(0))
         }
-        val view = TextView(this).apply {
+        val view = TextView(windowContext).apply {
             text = "WS"; textSize = 16f; gravity = Gravity.CENTER; setTextColor(android.graphics.Color.rgb(202, 232, 255))
             background = android.graphics.drawable.GradientDrawable().apply { setColor(0xF2152C4B.toInt()); cornerRadius = dp(27).toFloat(); setStroke(dp(1), 0xFF75BEFF.toInt()) }
             contentDescription = "ArcDeck floating workspace"
@@ -115,7 +119,7 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.CENTER; softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
-        val view = ComposeView(this).apply {
+        val view = ComposeView(windowContext).apply {
             setViewTreeLifecycleOwner(this@WorkspaceOverlayService)
             setViewTreeSavedStateRegistryOwner(this@WorkspaceOverlayService)
             setViewTreeViewModelStoreOwner(this@WorkspaceOverlayService)
@@ -155,7 +159,9 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     val revision by store.revision.collectAsState(); val catalogRevision by catalog.revision.collectAsState()
     val spaces = remember(revision) { store.all() }; val space = remember(revision) { store.active() }
     val appearance = rememberWorkspaceAppearance(); val scope = rememberCoroutineScope()
-    var entries by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }; var query by remember { mutableStateOf("") }
+    var entries by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }; var query by remember(space?.id) { mutableStateOf("") }
+    var showingNotes by remember(space?.id) { mutableStateOf(false) }
+    val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     var status by remember { mutableStateOf("") }; var preview by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(space?.id, revision, catalogRevision, query) {
         workspaceResult { withContext(Dispatchers.IO) { space?.let { store.items(it, catalog, query) } ?: emptyList() } }
@@ -168,24 +174,29 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }, color = appearance.surface) {
             Column(Modifier.padding(12.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row {
-                    Text("ArcDeck spaces", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    Text(space?.name ?: "ArcDeck spaces", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     TextButton(onClick = close) { Text("Minimize") }
                 }
                 if (preview != null) {
                     TextButton(onClick = { preview = null }) { Text("Back to space") }
                     Box(Modifier.weight(1f)) { WorkspacePreviewPane(preview) }
                 } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    if (!keyboardVisible) Row(Modifier.horizontalScroll(rememberScrollState())) {
                         spaces.forEach { item -> FilterChip(space?.id == item.id, { store.select(item.id) }, label = { Text(item.name) }) }
                     }
                     if (space == null) Text("Create an app space in ArcDeck, then use this panel over Discord, Brave, ChatGPT or any other app.")
                     else {
-                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                        if (!keyboardVisible) Row(Modifier.horizontalScroll(rememberScrollState())) {
                             TextButton(enabled = space.app.isNotBlank(), onClick = { act { WorkspaceApps.launch(context, space); close() } }) { Text("Open app") }
                             TextButton(onClick = { act { WorkspaceApps.copy(context, spaceContext(space.copy(notes = store.noteText(space)), entries)); status = "Copied notes and links" } }) { Text("Copy context") }
                             TextButton(onClick = { act { WorkspaceApps.shareText(context, spaceContext(space.copy(notes = store.noteText(space)), entries), space.app); close() } }) { Text("Share to app") }
                         }
-                        SpaceNotesEditor(space, store, Modifier.heightIn(max = 170.dp))
+                        Row {
+                            FilterChip(!showingNotes, { showingNotes = false }, label = { Text("Items") })
+                            FilterChip(showingNotes, { showingNotes = true }, label = { Text("Notes") })
+                        }
+                        if (showingNotes) SpaceNotesEditor(space, store, Modifier.weight(1f))
+                        else {
                         OutlinedTextField(query, { query = it.take(512) }, label = { Text("Find in this space") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         LazyColumn(Modifier.weight(1f)) {
                             items(entries, key = { it.key }) { entry -> Row {
@@ -204,6 +215,7 @@ class WorkspaceOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                                     WorkspaceApps.shareFiles(context, listOf(doc), space.app); close()
                                 } }) { Text("Share") }
                             } }
+                        }
                         }
                     }
                 }

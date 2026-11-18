@@ -50,14 +50,15 @@ internal object WorkspaceBackup {
         if (root.optString("format") != "arcdeck-workspace") { catalog.importUserLayer(raw); return }
         require(root.getInt("version") in 1..2) { "Unknown workspace backup version" }
         val prefs = root.optJSONObject("preferences") ?: JSONObject()
+        val current = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         val notes = prefs.optString("notes")
         val panels = prefs.optString("panels", "[]")
         require(notes.length <= 500_000) { "Notes are too large" }
         validatePanels(panels)
-        val appearance = prefs.optString("appearance", "{}"); WorkspaceAppearance.parse(appearance)
-        val profiles = prefs.optString("profiles", "[]"); WorkspaceProfiles.validate(profiles)
-        val spaces = prefs.optString("spaces", "[]"); val decodedSpaces = WorkspaceSpaces.decode(spaces)
-        val active = prefs.optString("active_space")
+        val appearance = prefs.optString("appearance", current.getString("appearance", "{}")); WorkspaceAppearance.parse(appearance)
+        val profiles = prefs.optString("profiles", current.getString("profiles", "[]")); WorkspaceProfiles.validate(profiles)
+        val spaces = prefs.optString("spaces", current.getString("spaces", "[]")); val decodedSpaces = WorkspaceSpaces.decode(spaces)
+        val active = prefs.optString("active_space", current.getString("active_space", ""))
         require(active.isBlank() || decodedSpaces.any { it.id == active }) { "Unknown active space" }
         val shortcut = prefs.optInt("workspace_key", android.view.KeyEvent.KEYCODE_F10)
         require(shortcut in setOf(android.view.KeyEvent.KEYCODE_F10, android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
@@ -69,7 +70,8 @@ internal object WorkspaceBackup {
         check(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit()
             .putString("notes", notes).putString("panels", panels).putString("panel_units", units)
             .putString("appearance", appearance).putString("profiles", profiles).putString("spaces", spaces).putString("active_space", active)
-            .putBoolean("system_bars", prefs.optBoolean("system_bars", false)).putBoolean("auto_index", prefs.optBoolean("auto_index", true))
+            .putBoolean("system_bars", prefs.optBoolean("system_bars", current.getBoolean("system_bars", false)))
+            .putBoolean("auto_index", prefs.optBoolean("auto_index", current.getBoolean("auto_index", true)))
             .putInt("workspace_key", shortcut)
             .putBoolean("landscape_prompt", prefs.optBoolean("landscape_prompt", false)).putLong("restore_epoch", System.nanoTime()).commit()) {
             "Organization restored; workspace preferences could not be saved"

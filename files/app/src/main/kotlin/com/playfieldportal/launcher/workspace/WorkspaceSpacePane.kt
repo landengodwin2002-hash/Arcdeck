@@ -57,13 +57,14 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
 }
 
 @Composable internal fun WorkspaceSpacePane(catalog: UnifiedCatalog, onPreview: (String) -> Unit,
-    onBrowse: (String) -> Unit, onGame: (Long) -> Unit, onCommand: (String) -> Unit) {
+    onBrowse: (String) -> Unit, onGame: (Long) -> Unit, onCommand: (String) -> Unit, onTool: (String) -> Unit = {}) {
     val context = LocalContext.current; val store = remember { WorkspaceSpaces.shared(context) }
     val revision by store.revision.collectAsState(); val catalogRevision by catalog.revision.collectAsState()
     val spaces = remember(revision) { store.all() }; val active = remember(revision) { store.active() }
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
-    var query by rememberSaveable { mutableStateOf("") }; var status by remember { mutableStateOf("") }
+    var query by rememberSaveable(active?.id) { mutableStateOf("") }; var status by remember { mutableStateOf("") }
+    var showingNotes by rememberSaveable(active?.id) { mutableStateOf(false) }
     var editor by remember { mutableStateOf(false) }; var edit by remember { mutableStateOf<AppSpace?>(null) }
     var attaching by remember { mutableStateOf(false) }; var removing by remember { mutableStateOf(false) }
     var shortcut by remember { mutableStateOf(false) }; var busy by remember { mutableStateOf(false) }
@@ -96,6 +97,7 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
             "FILE" -> onPreview(entry.target)
             "LINK" -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.target)))
             "COMMAND" -> onCommand(entry.target)
+            "TOOL" -> onTool(entry.target)
             else -> error("Open this item through the main Library")
         }
         ""
@@ -126,13 +128,21 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
                 } }) { Text("Open adjacent") }
                 TextButton(onClick = { work { WorkspaceApps.copy(context, spaceContext(active.copy(notes = store.noteText(active)), entries)); "Space notes and links copied" } }) { Text("Copy context") }
                 TextButton(onClick = { work { WorkspaceApps.shareText(context, spaceContext(active.copy(notes = store.noteText(active)), entries), active.app); "" } }) { Text("Share context to app") }
+                if (active.profile.isNotBlank()) TextButton(onClick = { work {
+                    if (WorkspaceProfiles.apply(context, active.profile)) "Layout applied" else "Linked layout was removed; choose another in Edit space"
+                } }) { Text("Layout: ${active.profile}") }
             }
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                FilterChip(!showingNotes, { showingNotes = false }, label = { Text("Items") })
+                FilterChip(showingNotes, { showingNotes = true }, label = { Text("Notes") })
+            }
+            if (showingNotes) SpaceNotesEditor(active, store, Modifier.weight(1f))
+            else {
             Row(Modifier.horizontalScroll(rememberScrollState())) {
                 TextButton(onClick = { attaching = true }) { Text("Attach library item") }
                 TextButton(enabled = !busy, onClick = { folder.launch(null) }) { Text("Connect folder") }
                 TextButton(onClick = { shortcut = true }) { Text("Add link") }
             }
-            SpaceNotesEditor(active, store)
             OutlinedTextField(query, { query = it.take(512) }, label = { Text("Search this space") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             LazyColumn(Modifier.weight(1f)) {
@@ -149,11 +159,12 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
                 } }
                 if (entries.isEmpty()) item { Text("Attach an existing library item, connect a folder, or share something to ArcDeck from another app.", Modifier.padding(8.dp)) }
             }
+            }
         }
         if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 4)
     }
-    if (editor) SpaceEditor(catalog, edit, { editor = false }) { name, app -> work { withContext(Dispatchers.IO) {
-        if (edit == null) store.create(name, app, catalog) else store.edit(edit!!.id, name, app)
+    if (editor) SpaceEditor(catalog, edit, { editor = false }) { name, app, profile -> work { withContext(Dispatchers.IO) {
+        if (edit == null) store.create(name, app, catalog, profile = profile) else store.edit(edit!!.id, name, app, profile)
         editor = false; "Space saved"
     } } }
     if (attaching && active != null) SpaceItemPicker(catalog, { attaching = false }) { entry -> work {
@@ -172,8 +183,11 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
     }, { TextButton(onClick = { store.remove(active.id); removing = false }) { Text("Remove space") } }, { TextButton(onClick = { removing = false }) { Text("Cancel") } })
 }
 
-@Composable private fun SpaceEditor(catalog: UnifiedCatalog, space: AppSpace?, dismiss: () -> Unit, save: (String, String) -> Unit) {
+@Composable private fun SpaceEditor(catalog: UnifiedCatalog, space: AppSpace?, dismiss: () -> Unit, save: (String, String, String) -> Unit) {
+    val context = LocalContext.current
     var name by remember { mutableStateOf(space?.name ?: "") }; var app by remember { mutableStateOf(space?.app ?: "") }
+    var profile by remember { mutableStateOf(space?.profile ?: "") }
+    val profiles = remember { org.json.JSONArray(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getString("profiles", "[]")) }
     var query by remember { mutableStateOf("") }; var apps by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     LaunchedEffect(query) { apps = withContext(Dispatchers.IO) { catalog.search("type:app $query", 300) } }
     WorkspaceDialog(dismiss, { Text(if (space == null) "New app space" else "Edit app space") }, {
@@ -181,10 +195,18 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
             OutlinedTextField(name, { name = it.take(60) }, label = { Text("Space name") })
             Text("Connected app: ${app.ifBlank { "none" }}", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { app = "" }) { Text("Use without a connected app") }
+            if (profiles.length() > 0) {
+                Text("Linked layout applies when opening the connected app.", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { profile = "" }) { Text(if (profile.isBlank()) "✓ Keep current layout" else "Keep current layout") }
+                for (i in 0 until profiles.length()) {
+                    val title = profiles.getJSONObject(i).getString("name")
+                    TextButton(onClick = { profile = title }) { Text((if (profile == title) "✓ " else "") + title) }
+                }
+            }
             OutlinedTextField(query, { query = it.take(100) }, label = { Text("Find any installed app") }, singleLine = true)
             apps.forEach { entry -> TextButton(onClick = { app = entry.target; if (name.isBlank()) name = entry.title.take(60) }) { Text((if (app == entry.target) "✓ " else "") + entry.title) } }
         }
-    }, { TextButton(enabled = name.isNotBlank(), onClick = { save(name, app) }) { Text("Save space") } }, { TextButton(onClick = dismiss) { Text("Cancel") } })
+    }, { TextButton(enabled = name.isNotBlank(), onClick = { save(name, app, profile) }) { Text("Save space") } }, { TextButton(onClick = dismiss) { Text("Cancel") } })
 }
 
 @Composable private fun SpaceItemPicker(catalog: UnifiedCatalog, dismiss: () -> Unit, attach: (CatalogEntry) -> Unit) {

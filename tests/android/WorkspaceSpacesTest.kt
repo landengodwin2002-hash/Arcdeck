@@ -75,16 +75,28 @@ class WorkspaceSpacesTest {
         assertThrows(IllegalArgumentException::class.java) { WorkspaceBackup.restore(context, catalog, backup.toString()) }
         assertEquals("Current name", catalog.get(key)!!.alias)
     }
+    @Test fun anOlderWorkspaceBackupPreservesNewerAppSpacesAndTheirNotes() {
+        val space = spaces.create("Keep this space", "", catalog); spaces.notes(space.id, "Keep these notes")
+        val old = JSONObject().put("format", "arcdeck-workspace").put("version", 1)
+            .put("catalog", JSONObject(catalog.exportUserLayer())).put("preferences", JSONObject().put("notes", "Old global notes").put("panels", "[]"))
+        WorkspaceBackup.restore(context, catalog, old.toString())
+        assertEquals(space.id, spaces.active()!!.id); assertEquals("Keep these notes", spaces.active()!!.notes)
+    }
     @Test fun namedLayoutsRestoreGeometryAndAppearance() {
         val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         val panels = "[{\"id\":1,\"tool\":\"SPACES\",\"x\":5,\"y\":60,\"w\":330,\"h\":500}]"
         prefs.edit().putString("panels", panels).putString("appearance", WorkspaceAppearance(palette = "Violet").json()).commit()
         WorkspaceProfiles.save(context, "Gaming")
+        val space = spaces.create("A game", "", catalog, profile = "Gaming")
+        spaces.draft(space.id, "Unsaved draft")
         prefs.edit().putString("panels", "[]").putString("appearance", "{}").commit()
         WorkspaceProfiles.load(context, 0)
         assertEquals(panels, prefs.getString("panels", ""))
         assertEquals("Violet", WorkspaceAppearance.parse(prefs.getString("appearance", "{}")!!).palette)
         assertEquals("dp", prefs.getString("panel_units", ""))
+        assertEquals("Gaming", spaces.active()!!.profile)
+        assertEquals("Unsaved draft", spaces.noteText(space))
+        assertEquals(0L, prefs.getLong("restore_epoch", 0L))
     }
     @Test fun incomingSharesRejectFileUrisAndDeduplicateContentGrants() {
         assertThrows(IllegalArgumentException::class.java) { WorkspaceSharing.parse(Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, Uri.parse("file:///etc/passwd"))) }
@@ -103,7 +115,7 @@ class WorkspaceSpacesTest {
     }
     @Test fun failedSharedFileImportRollsBackStagedFilesAndCatalogEntries() = runBlocking {
         val provider = FixtureDocumentsProvider()
-        provider.attachInfo(context, ProviderInfo().apply { authority = "arcdeck.test.documents"; exported = true; grantUriPermissions = true })
+        provider.attachInfo(context, ProviderInfo().apply { authority = "arcdeck.test.documents"; exported = true; grantUriPermissions = true; readPermission = "android.permission.MANAGE_DOCUMENTS"; writePermission = "android.permission.MANAGE_DOCUMENTS" })
         provider.onCreate(); ShadowContentResolver.registerProviderInternal("arcdeck.test.documents", provider)
         val id = provider.createDocument("root", "text/plain", "unreadable.txt"); provider.failRead = id
         val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(Uri.parse("content://arcdeck.test.documents/tree/root"), id)
@@ -122,7 +134,7 @@ class WorkspaceSpacesTest {
         WorkspaceSharing.import(context, catalog, space, IncomingShare("https://example.com/article", "Article", emptyList()))
         val entry = spaces.items(space, catalog).single()
         assertEquals("LINK", entry.kind); assertEquals("user", entry.source); assertEquals("https://example.com/article", entry.target)
-        assertTrue(JSONObject(catalog.exportUserLayer()).getJSONArray("custom_records").toString().contains("https://example.com/article"))
+        assertEquals("https://example.com/article", JSONObject(catalog.exportUserLayer()).getJSONArray("custom_records").getJSONObject(0).getString("target"))
     }
     @Test fun appearanceSliderEndpointsAndDraftContextRoundTrip() {
         val style = WorkspaceAppearance(opacity = 0.65f, dim = 0.8f, font = 1.35f)
@@ -137,6 +149,7 @@ class WorkspaceSpacesTest {
         org.robolectric.shadows.ShadowSettings.setCanDrawOverlays(true)
         val controller = Robolectric.buildService(WorkspaceOverlayService::class.java).create()
         try {
+            spaces.create("Floating notes", "", catalog)
             val service = controller.get(); service.onStartCommand(Intent(), 0, 1)
             val bubble = WorkspaceOverlayService::class.java.getDeclaredField("bubble").apply { isAccessible = true }.get(service) as android.view.View
             assertTrue(bubble.performClick())

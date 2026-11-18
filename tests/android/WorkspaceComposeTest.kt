@@ -112,4 +112,15 @@ class WorkspaceComposeTest {
         compose.runOnIdle { shown.value = false }; compose.waitForIdle()
         assertEquals("Keep across apps", store.all().single().notes)
     }
+    @Test fun savedLayoutsCanReuseWindowIdsForDifferentToolsWithoutLosingSearchState() {
+        compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithText("Search games, apps, files and tools").performTextInput("Kept across layouts")
+        val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
+        fun switch(tool: String, epoch: Long) = prefs.edit().putString("panels", "[{\"id\":1,\"tool\":\"$tool\",\"x\":0,\"y\":54,\"w\":360,\"h\":700,\"max\":true}]")
+            .putString("panel_units", "dp").putLong("layout_epoch", epoch).commit()
+        compose.runOnIdle { switch("FILES", 1) }; compose.waitForIdle()
+        compose.onNodeWithText("Choose folder").assertExists()
+        compose.runOnIdle { switch("SEARCH", 2) }; compose.waitForIdle()
+        compose.onNodeWithText("Search games, apps, files and tools").assertTextContains("Kept across layouts")
+    }
 }

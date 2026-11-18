@@ -79,7 +79,7 @@ internal object WorkspaceSharing {
                 require(doc.size <= MAX_FILE_BYTES) { "${doc.name} exceeds the 512 MB import limit; connect its folder instead" }
                 val suffix = doc.name.substringAfterLast('.', "").takeIf { it.matches(Regex("[A-Za-z0-9]{1,12}")) }
                     ?: android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(doc.mime) ?: "bin"
-                val file = File(batch, "file-$index.$suffix")
+                val file = File(batch, "file-$index.${suffix.lowercase(java.util.Locale.ROOT)}")
                 var bytes = 0L
                 (context.contentResolver.openInputStream(uri) ?: error("Cannot read ${doc.name}")).use { input -> file.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)

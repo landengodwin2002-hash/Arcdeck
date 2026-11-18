@@ -47,8 +47,8 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     "arcdeck_unified_v1.db", null, 2) {
     companion object {
         @Volatile private var shared: UnifiedCatalog? = null
-        fun shared(context: Context): UnifiedCatalog = shared ?: synchronized(this) {
-            shared ?: UnifiedCatalog(context.applicationContext).also { shared = it }
+        fun shared(context: Context): UnifiedCatalog = shared?.takeIf { it.app === context.applicationContext } ?: synchronized(this) {
+            shared?.takeIf { it.app === context.applicationContext } ?: UnifiedCatalog(context.applicationContext).also { shared = it }
         }
     }
     private val app = context.applicationContext

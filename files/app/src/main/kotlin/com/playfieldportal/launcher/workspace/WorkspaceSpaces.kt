@@ -12,7 +12,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-internal data class AppSpace(val id: String, val name: String, val app: String, val collection: String, val notes: String = "")
+internal data class AppSpace(val id: String, val name: String, val app: String, val collection: String, val notes: String = "", val profile: String = "")
 
 /** Spaces refer to the shared catalog, so tagging a file in one space updates it everywhere. */
 internal class WorkspaceSpaces private constructor(context: Context) {
@@ -27,21 +27,23 @@ internal class WorkspaceSpaces private constructor(context: Context) {
         require(all().any { it.id == id }) { "Space no longer exists" }
         prefs.edit().putString("active_space", id).apply(); updates.value++
     }
-    @Synchronized fun create(name: String, app: String, catalog: UnifiedCatalog, item: String? = null): AppSpace {
+    @Synchronized fun create(name: String, app: String, catalog: UnifiedCatalog, item: String? = null, profile: String = ""): AppSpace {
         val spaces = all(); require(spaces.size < 200) { "Up to 200 spaces are supported" }
         require(name.trim().length in 1..60) { "Space name needs 1–60 characters" }
         require(app.isEmpty() || app.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+"))) { "Invalid app package" }
         val id = UUID.randomUUID().toString()
-        val space = AppSpace(id, name.trim(), app, "${name.trim().take(50)} · ${id.take(8)}")
+        require(profile.length <= 60)
+        val space = AppSpace(id, name.trim(), app, "${name.trim().take(50)} · ${id.take(8)}", profile = profile)
         val collection = catalog.createCollection(space.collection)
         item?.let { catalog.addToCollection(collection, it) }
         save(spaces + space); select(id)
         return space
     }
-    @Synchronized fun edit(id: String, name: String, app: String) {
+    @Synchronized fun edit(id: String, name: String, app: String, profile: String = "") {
         require(name.trim().length in 1..60)
         require(app.isEmpty() || app.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")))
-        save(all().map { if (it.id == id) it.copy(name = name.trim(), app = app) else it })
+        require(profile.length <= 60)
+        save(all().map { if (it.id == id) it.copy(name = name.trim(), app = app, profile = profile) else it })
     }
     @Synchronized fun notes(id: String, value: String) {
         require(value.length <= 50_000) { "Space notes are limited to 50,000 characters" }
@@ -64,7 +66,7 @@ internal class WorkspaceSpaces private constructor(context: Context) {
     private fun save(spaces: List<AppSpace>) {
         val array = JSONArray()
         spaces.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name).put("app", it.app)
-            .put("collection", it.collection).put("notes", it.notes)) }
+            .put("collection", it.collection).put("notes", it.notes).put("profile", it.profile)) }
         check(prefs.edit().putString("spaces", array.toString()).commit()) { "Could not save spaces" }
         updates.value++
     }
@@ -84,7 +86,8 @@ internal class WorkspaceSpaces private constructor(context: Context) {
                 val app = o.optString("app"); require(app.isEmpty() || app.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")))
                 val collection = o.getString("collection"); require(collection.isNotBlank() && collection.length <= 80)
                 val notes = o.optString("notes"); require(notes.length <= 50_000)
-                AppSpace(id, name, app, collection, notes)
+                val profile = o.optString("profile"); require(profile.length <= 60)
+                AppSpace(id, name, app, collection, notes, profile)
             }
         }
     }
@@ -95,6 +98,7 @@ internal object WorkspaceApps {
         require(space.app.isNotBlank()) { "Choose a connected app first" }
         val intent = context.packageManager.getLaunchIntentForPackage(space.app) ?: error("Connected app is not installed")
         WorkspaceSpaces.shared(context).select(space.id)
+        WorkspaceProfiles.apply(context, space.profile)
         if (adjacent) intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK)
         else intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)

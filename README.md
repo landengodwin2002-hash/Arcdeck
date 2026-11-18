@@ -4,7 +4,7 @@ An Android home launcher and windowed workspace built on PlayFieldPortal 1.3.3. 
 
 ## App spaces and Android integration
 
-Create a space for any installed app (including Discord, Brave, ChatGPT, file managers or video apps), or create an independent/game space. Each space connects an app with notes, links, folders and items from the shared catalog. An item can belong to multiple spaces without duplicating its tags or source. Spaces are ordinary editable collections in Library too.
+Create a space for any installed app (including Discord, Brave, ChatGPT, file managers or video apps), or create an independent/game space. Each space connects an app with notes, links, folders and items from the shared catalog. An item can belong to multiple spaces without duplicating its tags or source. Spaces are ordinary editable collections in Library too. A saved layout can be linked in Edit space and applied when its app opens, giving that app its own workspace arrangement and appearance.
 
 In **System → Enable floating workspace over other apps**, allow Android's display-over-other-apps permission. A movable **WS** bubble opens the selected space over another app. It provides notes, search, previews, file sharing, context copying and a route back to the full workspace. The panel runs only when enabled, has an ongoing notification with Stop, and does not inspect other apps' private content or messages.
 

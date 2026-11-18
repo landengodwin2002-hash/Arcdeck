@@ -83,7 +83,13 @@ internal object WorkspaceProfiles {
         val p = JSONArray(prefs.getString("profiles", "[]")).getJSONObject(index)
         WorkspaceBackup.validatePanels(p.getString("panels")); WorkspaceAppearance.parse(p.getString("appearance"))
         prefs.edit().putString("panels", p.getString("panels")).putString("panel_units", "dp")
-            .putString("appearance", p.getString("appearance")).putLong("restore_epoch", System.nanoTime()).apply()
+            .putString("appearance", p.getString("appearance")).putLong("layout_epoch", System.nanoTime()).apply()
+    }
+    fun apply(context: Context, name: String): Boolean {
+        if (name.isBlank()) return false
+        val profiles = JSONArray(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getString("profiles", "[]"))
+        for (i in 0 until profiles.length()) if (profiles.getJSONObject(i).getString("name").equals(name, true)) { load(context, i); return true }
+        return false
     }
     fun delete(context: Context, index: Int) {
         val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -250,7 +251,7 @@ fun XmbWorkspaceOverlay(
     DisposableEffect(context) {
         val pref = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == "restore_epoch") {
+            if (key == "restore_epoch" || key == "layout_epoch") {
                 panels.clear(); panels.addAll(loadPanels(context))
                 nextId = (panels.maxOfOrNull { it.id } ?: 0) + 1
                 topOrder = (panels.maxOfOrNull { it.order } ?: 0) + 1
@@ -291,7 +292,7 @@ fun XmbWorkspaceOverlay(
         LocalDensity provides Density(density.density, density.fontScale * appearance.font)) {
     MaterialTheme(colorScheme = darkColorScheme(primary = appearance.accent, onPrimary = Color(0xFF081C30),
         surface = appearance.surface, onSurface = Ice, background = appearance.ink, onBackground = Ice)) {
-    BoxWithConstraints(modifier.fillMaxSize().then(if (nativeBars) Modifier.safeDrawingPadding() else Modifier).zIndex(10000f)) {
+    BoxWithConstraints(modifier.fillMaxSize().then(if (nativeBars) Modifier.safeDrawingPadding() else Modifier).imePadding().zIndex(10000f)) {
         val viewportWidth = maxWidth.value
         val viewportHeight = maxHeight.value
         val screenWidthPx = with(density) { maxWidth.toPx() }
@@ -396,12 +397,12 @@ fun XmbWorkspaceOverlay(
                                 }
                                 FrameControl("×") {
                                     panels.removeAll { it.id == panel.id }
-                                    paneState.removeState(panel.id)
+                                    paneState.removeState("${panel.tool.name}:${panel.id}")
                                     onSound(MenuSound.BACK)
                                 }
                             }
                             Box(Modifier.weight(1f).fillMaxWidth().padding(8.dp)) {
-                                paneState.SaveableStateProvider(panel.id) {
+                                paneState.SaveableStateProvider("${panel.tool.name}:${panel.id}") {
                                 when (panel.tool) {
                                     Tool.SEARCH, Tool.LIBRARY, Tool.COLLECTIONS -> UnifiedLibraryPane(
                                         catalog = catalog,
@@ -434,7 +435,12 @@ fun XmbWorkspaceOverlay(
                                         onPreview = ::preview, onOpenPfpFeature = onOpenPfpFeature, onSpaceCreated = { activate(Tool.SPACES) })
                                     Tool.SPACES -> WorkspaceSpacePane(catalog, ::preview,
                                         { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, onOpenPfpGame,
-                                        { command -> queuedCommand = command; commandRequest++; activate(Tool.TERMINAL) })
+                                        { command -> queuedCommand = command; commandRequest++; activate(Tool.TERMINAL) },
+                                        { target -> when {
+                                            target.startsWith("arcdeck:") -> Tool.entries.firstOrNull { it.name.equals(target.removePrefix("arcdeck:"), true) }?.let { activate(it) }
+                                            target.startsWith("pfp:") -> onOpenPfpFeature(target.removePrefix("pfp:"))
+                                            else -> openSystem(context, target)
+                                        } })
                                     Tool.PREVIEW -> WorkspacePreviewPane(previewUri)
                                     Tool.PFP -> WorkspacePfpPane(pfpSections, onOpenPfpFeature)
                                     Tool.CUSTOMIZE -> WorkspaceAppearancePane(Tool.entries.filter { it != Tool.PREVIEW }.map { it.name to it.title },
@@ -508,12 +514,12 @@ private fun SystemTool(onClose: () -> Unit, onSystemUiChanged: () -> Unit, onRes
     var landscape by remember { mutableStateOf(preferences.getBoolean("landscape_prompt", false)) }
     var editShortcut by remember { mutableStateOf(false) }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        WorkspaceAndroidControls(onSystemUiChanged)
         ListAction("⚙  Android settings") { openSystem(context, Settings.ACTION_SETTINGS) }
         ListAction("⌂  Change default home app") { openSystem(context, Settings.ACTION_HOME_SETTINGS) }
         ListAction("▣  File manager") { openSystem(context, Settings.ACTION_INTERNAL_STORAGE_SETTINGS) }
         ListAction("▤  Wi-Fi settings") { openSystem(context, Settings.ACTION_WIFI_SETTINGS) }
         ListAction("◉  Bluetooth settings") { openSystem(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
+        WorkspaceAndroidControls(onSystemUiChanged)
         ListAction("⌨  Workspace shortcut: ${when (shortcut) {
             android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> "Select"
             android.view.KeyEvent.KEYCODE_BUTTON_START -> "Start"
