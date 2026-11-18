@@ -68,6 +68,11 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
     var editor by remember { mutableStateOf(false) }; var edit by remember { mutableStateOf<AppSpace?>(null) }
     var attaching by remember { mutableStateOf(false) }; var removing by remember { mutableStateOf(false) }
     var shortcut by remember { mutableStateOf(false) }; var busy by remember { mutableStateOf(false) }
+    var connections by rememberSaveable { mutableStateOf(false) }
+    if (connections) {
+        WorkspaceGameConnectionsPane(catalog, { connections = false }, onBrowse, { onTool("pfp:library") })
+        return
+    }
     fun work(block: suspend () -> String) { if (!busy) scope.launch {
         busy = true; workspaceResult { block() }.onSuccess { status = it }.onFailure { status = it.message ?: "Action failed" }; busy = false
     } }
@@ -104,6 +109,7 @@ internal fun spaceContext(space: AppSpace, items: List<CatalogEntry>): String = 
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.horizontalScroll(rememberScrollState())) {
+            TextButton(onClick = { connections = true }) { Text("Game connections") }
             TextButton(onClick = { edit = null; editor = true }) { Text("New app space") }
             if (active != null) {
                 TextButton(onClick = { edit = active; editor = true }) { Text("Edit space") }

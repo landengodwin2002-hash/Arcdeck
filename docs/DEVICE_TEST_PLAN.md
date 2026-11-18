@@ -1,4 +1,13 @@
-# ArcDeck 1.1 phone checks
+# ArcDeck 1.2 phone checks
+
+1. Install the matching edition over 1.1 without uninstalling. Existing spaces, notes, games and folder permissions should remain.
+2. In Spaces → Game connections, check that Papaya and the actual GameHub Lite variant are detected. A real spoof-name app such as AnTuTu must not be identified as GameHub.
+3. Connect Papaya's existing ROM folder as Games / ROMs. Browse/search its files. Open the Papaya space and app, then use Import ROMs / PFP exports to add the same root in PFP Library Manager with its real platforms/emulators.
+4. Use connected folder to attach that same directory to GameHub. Check that source bytes stay in place and tags/aliases apply across spaces. Connect separate saves/artwork folders too.
+5. If GameHub exposes a file provider, select Connect GameHub provider and grant its desired app/files directory. Find saves / components, browse the found directories and pin them to the GameHub space. No game, save or component should be overwritten.
+6. Review a folder containing real GameHub/Papaya-style `.steamappid`/`.localgameid` files. Verify names and IDs before import, choose the correct installed GameHub build, import selected games and launch through PFP's game detail. A same-number Steam ID and local ID must launch in their own namespace. Repeat the import and check no duplicate exact launch handles appear; tags and aliases survive.
+7. Cancel folder selection, revoke a grant, restart/remove the source app or disconnect a folder. ArcDeck must show reconnect/missing status and retain other apps' folder connections and the actual source files. After backup restore on another installation, grant access again.
+8. Test portrait and landscape, open/close the Game connections pane, return from the source app, and rotate while Android's folder picker is open. Check read-only providers and partial scans with a large directory. These steps require the owner's physical phone; automated tests cannot confirm its actual installed apps or files.
 
 The automated suite covers the catalog, document operations, backups, callbacks and phone-sized Compose controls. These checks exercise your actual device, accounts, emulators and controller:
 

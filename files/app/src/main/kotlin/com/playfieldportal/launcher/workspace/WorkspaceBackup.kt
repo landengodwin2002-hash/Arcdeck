@@ -36,6 +36,7 @@ internal object WorkspaceBackup {
             .put("appearance", prefs.getString("appearance", "{}"))
             .put("profiles", prefs.getString("profiles", "[]"))
             .put("spaces", prefs.getString("spaces", "[]"))
+            .put("game_connections", prefs.getString("game_connections", "[]"))
             .put("active_space", prefs.getString("active_space", ""))
             .put("system_bars", prefs.getBoolean("system_bars", false))
             .put("auto_index", prefs.getBoolean("auto_index", true))
@@ -59,6 +60,8 @@ internal object WorkspaceBackup {
         val profiles = prefs.optString("profiles", current.getString("profiles", "[]")); WorkspaceProfiles.validate(profiles)
         val spaces = prefs.optString("spaces", current.getString("spaces", "[]")); val decodedSpaces = WorkspaceSpaces.decode(spaces)
         val active = prefs.optString("active_space", current.getString("active_space", ""))
+        val connections = prefs.optString("game_connections", current.getString("game_connections", "[]"))
+        WorkspaceGameConnections.decode(connections)
         require(active.isBlank() || decodedSpaces.any { it.id == active }) { "Unknown active space" }
         val shortcut = prefs.optInt("workspace_key", android.view.KeyEvent.KEYCODE_F10)
         require(shortcut in setOf(android.view.KeyEvent.KEYCODE_F10, android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
@@ -70,6 +73,7 @@ internal object WorkspaceBackup {
         check(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit()
             .putString("notes", notes).putString("panels", panels).putString("panel_units", units)
             .putString("appearance", appearance).putString("profiles", profiles).putString("spaces", spaces).putString("active_space", active)
+            .putString("game_connections", connections)
             .putBoolean("system_bars", prefs.optBoolean("system_bars", current.getBoolean("system_bars", false)))
             .putBoolean("auto_index", prefs.optBoolean("auto_index", current.getBoolean("auto_index", true)))
             .putInt("workspace_key", shortcut)

@@ -1,6 +1,16 @@
-# ArcDeck Workspace 1.1
+# ArcDeck Workspace 1.2
 
 An Android home launcher and windowed workspace built on PlayFieldPortal 1.3.3. Games, installed apps, approved storage folders, files, command shortcuts and system tools share one searchable library and organization system.
+
+## Papaya and GameHub Lite
+
+Open **Spaces → Game connections**. ArcDeck detects Papaya and installed GameHub-family launchers, including verified package variants. Create/open each app's space, then connect the existing folders on your phone as **Games / ROMs**, **PC game IDs**, **Saves**, **Artwork** or **App files**. **Use connected folder** reuses an existing Android folder grant and lets both apps' spaces reference the same directory. Connection indexes names and references; it does not copy, move or replace games, saves or components.
+
+When the installed GameHub build exposes its MT document provider, **Connect GameHub provider** opens Android's folder picker at that app's provider. Allow the desired folder there. **Find saves / components** resolves standard save-container, component, Steam and log directories using provider queries; discovered folders can be browsed and pinned to the app space. Availability depends on the installed GameHub build. Android's ordinary storage picker cannot grant another app's restricted `Android/data` directory on Android 11 and later; a source app's own document provider or an export/shared folder is needed.
+
+**Review PC IDs** recognizes small `.steam`, `.steamappid`, `.localgameid` and ID-only `.txt` files, shows their titles/IDs, and lets you choose a detected GameHub build before importing. Steam and local ID namespaces stay distinct. Imports create ordinary PFP Windows game records and attach them to the source app's space. Repeating the same import matches its launch handle and preserves tags/aliases. Real ISO images and ordinary notes are never interpreted as launchers. Scans are bounded to 6,000 entries, 12 directory levels and 500 recognized IDs per review; select a smaller folder for larger libraries. No automatic import runs in the background.
+
+For ROM platform assignment, emulator configuration and PFP's richer `.desktop`/`.pfpgame` import formats, **Import ROMs / PFP exports** opens the original Library Manager. Choose the same existing root used in Papaya there. Papaya's private database, scraped metadata, settings and permissions are not publicly exposed by its asset/config repository and are not claimed as synchronized. Folder connections, roles and space references are backed up; a new installation/device must grant its own folder access.
 
 ## App spaces and Android integration
 

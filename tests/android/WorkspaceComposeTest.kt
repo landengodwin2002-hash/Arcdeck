@@ -34,6 +34,14 @@ class WorkspaceComposeTest {
         catalog = UnifiedCatalog(context)
     }
     @After fun cleanup() { catalog.close() }
+    @Test fun gameConnectionsCanBeOpenedAndClosedAtPhoneWidth() {
+        compose.setContent { MaterialTheme { WorkspaceSpacePane(catalog, {}, {}, {}, {}) } }
+        compose.onNodeWithText("Game connections").performClick()
+        waitFor("Connect existing folder")
+        compose.onNodeWithText("Connect existing folder").assertIsDisplayed()
+        compose.onNodeWithText("Back to spaces").performClick()
+        compose.onNodeWithText("New app space").assertExists()
+    }
     private fun waitFor(text: String) = compose.waitUntil(15000) {
         compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
     }

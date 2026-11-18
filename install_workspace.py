@@ -246,7 +246,7 @@ def plan_install(repo):
     sources = base / 'files/app/src/main/kotlin/com/playfieldportal/launcher/workspace'
     required = {'XmbWorkspaceOverlay.kt', 'UnifiedCatalog.kt', 'UnifiedQuery.kt', 'UnifiedLibraryPane.kt',
                 'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt',
-                'WorkspaceSpaces.kt', 'WorkspaceSpacePane.kt', 'WorkspaceSharing.kt', 'WorkspaceOverlayService.kt',
+                'WorkspaceSpaces.kt', 'WorkspaceSpacePane.kt', 'WorkspaceGameConnections.kt', 'WorkspaceGameConnectionsPane.kt', 'WorkspaceSharing.kt', 'WorkspaceOverlayService.kt',
                 'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
