@@ -74,8 +74,6 @@ class WorkspaceComposeTest {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
         compose.onNodeWithTag("workspace-tool-SYSTEM").performScrollTo().assertIsDisplayed().performClick()
         compose.waitForIdle()
-        println("System dock bounds: " + compose.onNodeWithTag("workspace-tool-SYSTEM").fetchSemanticsNode().boundsInRoot)
-        println(compose.onRoot().printToString(maxDepth = 8))
         val directory = System.getProperty("arcdeck.screenshot.dir")
         if (directory != null) {
             val file = File(directory, "workspace-phone.png"); file.parentFile!!.mkdirs()

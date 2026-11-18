@@ -50,6 +50,24 @@ class WorkspaceSpacesTest {
             assertEquals("Browser notes", spaces.all().first { it.id == browser.id }.notes)
         }
     }
+    @Test fun aSpaceSearchIncludesItsConnectedFolderWithoutEscapingToOtherSources() {
+        val root = Uri.parse("content://scope.test/tree/UpperCaseRoot")
+        val doc = android.provider.DocumentsContract.buildDocumentUriUsingTree(root, "UpperCaseRoot")
+        catalog.addRoot(root, "Connected root")
+        catalog.registerDocument(WorkspaceDocument(doc, "Connected root", android.provider.DocumentsContract.Document.MIME_TYPE_DIR, 0, 0), "space:folders")
+        catalog.syncSource("saf:$root", listOf(CatalogEntry("file:connected", "FILE", "Scope document", "text/plain", "content://scope.test/document/one", "saf:$root")))
+        catalog.syncSource("outside", listOf(CatalogEntry("file:outside", "FILE", "Scope elsewhere", "text/plain", "content://other.test/document/two", "outside")))
+        val space = spaces.create("Folder space", "", catalog, "file:$doc")
+        assertEquals("file:connected", spaces.items(space, catalog, "document").single().key)
+        assertFalse(spaces.items(space, catalog, "Scope").any { it.key == "file:outside" })
+    }
+    @Test fun anExplicitCollectionFilterCannotEscapeTheCurrentSpace() {
+        val own = catalog.addCustom("LINK", "Own", "https://example.com/own")
+        val outside = catalog.addCustom("LINK", "Outside", "https://example.com/outside")
+        val space = spaces.create("Local", "", catalog, own)
+        val other = catalog.createCollection("Outside"); catalog.addToCollection(other, outside)
+        assertTrue(spaces.items(space, catalog, "in:$other").isEmpty())
+    }
     @Test fun deletingASpacePreservesItsLibraryItemsAndOtherSpaces() {
         val key = catalog.addCustom("LINK", "Keep me", "https://example.com")
         val one = spaces.create("One", "", catalog, key); val two = spaces.create("Two", "", catalog, key)

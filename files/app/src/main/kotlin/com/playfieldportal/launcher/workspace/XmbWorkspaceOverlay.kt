@@ -359,16 +359,17 @@ fun XmbWorkspaceOverlay(
                         val drawHeight = if (panel.maximized) (viewportHeight - 100f).coerceAtLeast(120f).dp else heightDp.dp
 
                         Column(
-                            Modifier.testTag("workspace-panel-${panel.tool.name}").zIndex(1f + panel.order)
+                            Modifier.zIndex(1f + panel.order)
+                                .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                                .width(drawWidth).height(drawHeight)
+                                .clip(RoundedCornerShape(appearance.corners.dp))
+                                .testTag("workspace-panel-${panel.tool.name}")
                                 .pointerInput(panel.id) {
                                     awaitEachGesture {
                                         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                         update(panel.id) { it.copy(order = topOrder++) }
                                     }
                                 }
-                                .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
-                                .width(drawWidth).height(drawHeight)
-                                .clip(RoundedCornerShape(appearance.corners.dp))
                                 .background(Brush.verticalGradient(listOf(appearance.surface, Ink)))
                                 .border(1.dp, Line, RoundedCornerShape(appearance.corners.dp))
                                 .clickable { update(panel.id) { it.copy(order = topOrder++) } }

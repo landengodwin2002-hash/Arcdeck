@@ -60,8 +60,10 @@ internal class WorkspaceSpaces private constructor(context: Context) {
     @Synchronized fun reload() { drafts.clear(); updates.value++ }
     fun collectionId(space: AppSpace, catalog: UnifiedCatalog): Long =
         catalog.collections().find { it.name.equals(space.collection, true) }?.id ?: catalog.createCollection(space.collection)
-    fun items(space: AppSpace, catalog: UnifiedCatalog, query: String = ""): List<CatalogEntry> =
-        catalog.search("in:${collectionId(space, catalog)} $query", 1000)
+    fun items(space: AppSpace, catalog: UnifiedCatalog, query: String = ""): List<CatalogEntry> {
+        val collection = collectionId(space, catalog)
+        return catalog.search(query, 1000, scopeCollection = collection, scopeSources = catalog.collectionSources(collection))
+    }
     fun attach(space: AppSpace, key: String, catalog: UnifiedCatalog) = catalog.addToCollection(collectionId(space, catalog), key)
     private fun save(spaces: List<AppSpace>) {
         val array = JSONArray()

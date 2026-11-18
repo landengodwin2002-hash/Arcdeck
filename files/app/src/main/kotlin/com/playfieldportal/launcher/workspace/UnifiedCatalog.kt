@@ -348,7 +348,8 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     )
 
     /** Search across all sources and filters. All SQL values use bound placeholders. */
-    fun search(raw: String, limit: Int = 100, offset: Int = 0): List<CatalogEntry> {
+    fun search(raw: String, limit: Int = 100, offset: Int = 0, scopeCollection: Long? = null,
+        scopeSources: Set<String> = emptySet()): List<CatalogEntry> {
         val parsed = resolveQuery(UnifiedQuery.parse(raw))
         if (parsed.invalid.isNotEmpty()) return emptyList()
         val sql = StringBuilder("""SELECT r.key,r.kind,r.title,r.subtitle,r.target,r.source,r.missing,
@@ -362,6 +363,18 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         }
         val conditions = mutableListOf<String>()
         if (fts.isNotBlank()) { conditions.add("record_fts MATCH ?"); args.add(fts) }
+        if (scopeCollection != null) {
+            require(scopeSources.size <= 100)
+            val scope = mutableListOf("EXISTS(SELECT 1 FROM memberships sc WHERE sc.key=r.key AND sc.collection_id=?)")
+            args.add(scopeCollection.toString())
+            if (scopeSources.isNotEmpty()) {
+                val placeholders = scopeSources.joinToString(",") { "?" }
+                scope.add("r.source IN ($placeholders)"); args.addAll(scopeSources)
+                scope.add("EXISTS(SELECT 1 FROM game_files sg JOIN records sf ON sf.target=sg.rom_uri WHERE sg.game_key=r.key AND sf.source IN ($placeholders))")
+                args.addAll(scopeSources)
+            }
+            conditions.add(scope.joinToString(" OR ", "(", ")"))
+        }
         // A ROM indexed through SAF is the same object as its PFP game. Universal
         // results prefer the game entry; type:file still exposes the underlying file.
         if (parsed.kinds.isEmpty() && parsed.sources.isEmpty()) {
@@ -422,6 +435,17 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             if (c.moveToFirst()) return c.getString(0).removePrefix("pfp-game:").toLongOrNull()
         }
         return null
+    }
+
+    fun collectionSources(collection: Long): Set<String> {
+        val folders = mutableSetOf<String>()
+        readableDatabase.rawQuery("SELECT r.key FROM records r JOIN memberships m ON m.key=r.key WHERE m.collection_id=? AND r.kind='FOLDER'",
+            arrayOf(collection.toString())).use { c -> while (c.moveToNext()) folders.add(c.getString(0)) }
+        return roots().mapNotNull { root ->
+            val uri = Uri.parse(root.uri)
+            val document = android.provider.DocumentsContract.buildDocumentUriUsingTree(uri, android.provider.DocumentsContract.getTreeDocumentId(uri))
+            "saf:${root.uri}".takeIf { "file:$document" in folders }
+        }.toSet()
     }
 
     private fun makeMetadata(key: String) {
