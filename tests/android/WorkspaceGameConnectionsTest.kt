@@ -159,10 +159,10 @@ class WorkspaceGameConnectionsTest {
         val space = connections.space(GameConnectionApp("gamehub.lite", "Hub", true, true), catalog)
         val candidates = listOf(PcIdCandidate("a", "Same title", "570", "STEAM"), PcIdCandidate("b", "Same title", "570", "LOCAL"))
         val reviewed = candidates.map { it to WorkspaceGameImport.launchIntent(context, space.app, it) }
-        WorkspaceGameImport.importReviewed(space.app, reviewed, space, catalog, repo)
+        WorkspaceGameImport.importReviewed(context, space.app, reviewed, space, catalog, repo)
         assertEquals(2, rows.value.size); assertEquals(2, WorkspaceSpaces.shared(context).items(space, catalog, "type:game").size)
         catalog.rename("pfp-game:1", "Personal name"); catalog.addTag("pfp-game:1", "favorite-rpg")
-        WorkspaceGameImport.importReviewed(space.app, reviewed, space, catalog, repo)
+        WorkspaceGameImport.importReviewed(context, space.app, reviewed, space, catalog, repo)
         assertEquals(2, rows.value.size); assertEquals("Personal name", catalog.get("pfp-game:1")!!.alias)
         assertEquals(listOf("favorite-rpg"), catalog.tags("pfp-game:1"))
     }

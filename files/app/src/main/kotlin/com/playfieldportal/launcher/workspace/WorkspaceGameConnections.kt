@@ -196,12 +196,12 @@ internal object WorkspaceGameImport {
         require(candidates.size in 1..500)
         val intents = candidates.map { it to launchIntent(context, pkg, it) } // validate before the first database write
         val deps = EntryPointAccessors.fromApplication(context.applicationContext, WorkspaceGameImportDependencies::class.java)
-        val result = importReviewed(pkg, intents, space, catalog, deps.games())
+        val result = importReviewed(context, pkg, intents, space, catalog, deps.games())
         runCatching { deps.windows().ensure() }
         runCatching { deps.memoryCards().recountGames("windows") }
         result
     }
-    internal suspend fun importReviewed(pkg: String, intents: List<Pair<PcIdCandidate, Intent>>, space: AppSpace,
+    internal suspend fun importReviewed(context: Context, pkg: String, intents: List<Pair<PcIdCandidate, Intent>>, space: AppSpace,
         catalog: UnifiedCatalog, repo: GameRepository): String {
         var added = 0; var matched = 0; val ids = mutableListOf<Long>()
         for ((candidate, intent) in intents) {
