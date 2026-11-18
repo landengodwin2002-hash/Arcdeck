@@ -287,7 +287,7 @@ def install(repo, check=False):
     backups = []
     try:
         for path in changed:
-            backup = path.with_name(path.name+'.arcdeck.orig')
+            backup = repo / '.arcdeck-backups' / path.relative_to(repo).with_name(path.name+'.arcdeck.orig')
             if path in upstream and not backup.exists():
                 atomic_write(backup, originals[path])
                 backups.append(backup)

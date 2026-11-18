@@ -57,6 +57,7 @@ def main():
         assert 'FOREGROUND_SERVICE_SPECIAL_USE' in manifest.read_text()
         assert 'pfpSections = arcDeckPfpState.categories' in act.read_text()
         assert 'handleArcDeckIntent' in act.read_text()
+        assert not list((base/'app/src/main/res').rglob('*.arcdeck.orig'))
         assert 'android:exported="false"' in manifest.read_text()
         assert 'workspace_key' in act.read_text()
         assert 'landscape_prompt' in act.read_text()
