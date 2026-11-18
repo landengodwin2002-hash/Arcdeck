@@ -128,7 +128,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
             entries.forEach { upsert(db, it, stamp) }
             if (complete) {
                 db.execSQL("UPDATE records SET missing=1 WHERE source=? AND seen<>?",
-                    arrayOf(source, stamp))
+                    arrayOf<Any?>(source, stamp))
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -384,20 +384,20 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     @Synchronized
     fun setFavorite(key: String, value: Boolean) {
         makeMetadata(key)
-        writableDatabase.execSQL("UPDATE metadata SET favorite=? WHERE key=?", arrayOf(flag(value), key))
+        writableDatabase.execSQL("UPDATE metadata SET favorite=? WHERE key=?", arrayOf<Any?>(flag(value), key))
     }
 
     @Synchronized
     fun setPinned(key: String, value: Boolean) {
         makeMetadata(key)
-        writableDatabase.execSQL("UPDATE metadata SET pinned=? WHERE key=?", arrayOf(flag(value), key))
+        writableDatabase.execSQL("UPDATE metadata SET pinned=? WHERE key=?", arrayOf<Any?>(flag(value), key))
     }
 
     @Synchronized
     fun markOpened(key: String) {
         makeMetadata(key)
         writableDatabase.execSQL("UPDATE metadata SET last_opened=? WHERE key=?",
-            arrayOf(System.currentTimeMillis(), key))
+            arrayOf<Any?>(System.currentTimeMillis(), key))
     }
 
     fun tags(key: String): List<String> {
@@ -442,13 +442,13 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     @Synchronized
     fun addToCollection(collectionId: Long, key: String) {
         writableDatabase.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key) VALUES (?,?)",
-            arrayOf(collectionId, key))
+            arrayOf<Any?>(collectionId, key))
     }
 
     @Synchronized
     fun removeFromCollection(collectionId: Long, key: String) {
         writableDatabase.execSQL("DELETE FROM memberships WHERE collection_id=? AND key=?",
-            arrayOf(collectionId, key))
+            arrayOf<Any?>(collectionId, key))
     }
 
     @Synchronized
@@ -474,7 +474,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
                 java.util.Collections.swap(order, index, destination)
                 for ((position, item) in order.withIndex()) {
                     db.execSQL("UPDATE memberships SET position=? WHERE collection_id=? AND key=?",
-                        arrayOf(position, collectionId, item))
+                        arrayOf<Any?>(position, collectionId, item))
                 }
             }
             db.setTransactionSuccessful()
@@ -598,7 +598,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
                 val key = o.getString("key")
                 if (get(key) == null) continue
                 db.execSQL("INSERT OR IGNORE INTO memberships(collection_id,key,position) VALUES(?,?,?)",
-                    arrayOf(id, key, o.optInt("position", 0)))
+                    arrayOf<Any?>(id, key, o.optInt("position", 0)))
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
