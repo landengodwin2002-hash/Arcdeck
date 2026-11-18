@@ -160,7 +160,7 @@ internal fun WorkspaceTerminalPane(initialCommand: String?, requestId: Int = 0) 
     }
     review?.let { reviewed ->
         val reviewedInteractive = interactive
-        AlertDialog(onDismissRequest = { review = null }, title = { Text("Run this command in Termux?") },
+        WorkspaceDialog(onDismissRequest = { review = null }, title = { Text("Run this command in Termux?") },
             text = { Column { Text(reviewed, fontFamily = FontFamily.Monospace)
                 Text(if (reviewedInteractive) "Opens an interactive Termux session." else "Runs in the background and returns output to this window.") } },
             confirmButton = { TextButton(onClick = {

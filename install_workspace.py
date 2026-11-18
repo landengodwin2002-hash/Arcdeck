@@ -139,7 +139,7 @@ def plan_install(repo):
     result[gradle] = text
     sources = base / 'files/app/src/main/kotlin/com/playfieldportal/launcher/workspace'
     required = {'XmbWorkspaceOverlay.kt', 'UnifiedCatalog.kt', 'UnifiedQuery.kt', 'UnifiedLibraryPane.kt',
-                'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt'}
+                'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
     orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'

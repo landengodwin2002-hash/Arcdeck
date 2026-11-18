@@ -244,7 +244,7 @@ internal fun UnifiedLibraryPane(
         var tags by remember(entry.key) { mutableStateOf<List<String>>(emptyList()) }
         var collectionFilter by remember(entry.key) { mutableStateOf("") }
         LaunchedEffect(entry.key, revision) { tags = withContext(Dispatchers.IO) { catalog.tags(entry.key) } }
-        AlertDialog(onDismissRequest = { selected = null }, title = { Text(entry.title, maxLines = 2) }, text = {
+        WorkspaceDialog(onDismissRequest = { selected = null }, title = { Text(entry.title, maxLines = 2) }, text = {
             Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("${entry.kind.lowercase()} · ${entry.source}", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(alias, { alias = it.take(120) }, label = { Text("Display alias") }, singleLine = true)
@@ -297,7 +297,7 @@ internal fun UnifiedLibraryPane(
         var name by remember(col.id) { mutableStateOf(col.name) }
         var expression by remember(col.id) { mutableStateOf(col.expression ?: "") }
         var error by remember(col.id) { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { collectionEditor = null }, title = { Text(if (col.id == 0L) "New collection" else "Edit collection") }, text = {
+        WorkspaceDialog(onDismissRequest = { collectionEditor = null }, title = { Text(if (col.id == 0L) "New collection" else "Edit collection") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(name, { name = it.take(80) }, label = { Text("Name") })
                 OutlinedTextField(expression, { expression = it.take(512) }, label = { Text("Smart query; leave blank for manual") })
@@ -319,7 +319,7 @@ internal fun UnifiedLibraryPane(
         var target by remember { mutableStateOf("") }
         var command by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf("") }
-        AlertDialog(onDismissRequest = { newShortcut = false }, title = { Text("New shortcut") }, text = {
+        WorkspaceDialog(onDismissRequest = { newShortcut = false }, title = { Text("New shortcut") }, text = {
             Column {
                 OutlinedTextField(name, { name = it.take(120) }, label = { Text("Name") })
                 OutlinedTextField(target, { target = it.take(2048) }, label = { Text(if (command) "Termux command" else "https:// URL") })
@@ -331,10 +331,10 @@ internal fun UnifiedLibraryPane(
                 .onSuccess { newShortcut = false }.onFailure { error = it.message ?: "Could not add shortcut" }
         } }) { Text("Add") } }, dismissButton = { TextButton(onClick = { newShortcut = false }) { Text("Cancel") } })
     }
-    confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Confirm") }, text = { Text(text) },
+    confirm?.let { (text, action) -> WorkspaceDialog(onDismissRequest = { confirm = null }, title = { Text("Confirm") }, text = { Text(text) },
         confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("Confirm") } },
         dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } }) }
-    restoreUri?.let { uri -> AlertDialog(onDismissRequest = { restoreUri = null }, title = { Text("Restore workspace backup?") },
+    restoreUri?.let { uri -> WorkspaceDialog(onDismissRequest = { restoreUri = null }, title = { Text("Restore workspace backup?") },
         text = { Text("Collections and organization will merge. Backed-up notes and window layout replace the current ones. Storage permissions must be reconnected on a new device.") },
         confirmButton = { TextButton(onClick = { restoreUri = null; work { withContext(Dispatchers.IO) {
             val raw = (context.contentResolver.openInputStream(uri) ?: error("Cannot read backup"))

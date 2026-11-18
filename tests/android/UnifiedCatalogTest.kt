@@ -175,6 +175,21 @@ class UnifiedCatalogTest {
         assertEquals("Important notes", prefs.getString("notes", ""))
         assertThrows(IllegalArgumentException::class.java) { WorkspaceBackup.readBounded(StringReader("a".repeat(5_000_001))) }
     }
+    @Test fun malformedWorkspaceLayoutDoesNotOverwriteExistingNotesOrCatalog() {
+        val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
+        prefs.edit().putString("notes", "Keep").commit()
+        val catalog = JSONObject().put("format", 2).put("custom_records", JSONArray().put(JSONObject()
+            .put("key", "user:layout-test").put("kind", "COMMAND").put("title", "Uncommitted").put("target", "echo test")))
+        val raw = JSONObject().put("format", "arcdeck-workspace").put("version", 1).put("catalog", catalog)
+            .put("preferences", JSONObject().put("notes", "Overwrite").put("panels", "[{\"id\":1,\"tool\":\"UNKNOWN\"}]"))
+        assertThrows(IllegalArgumentException::class.java) { WorkspaceBackup.restore(context, db, raw.toString()) }
+        assertEquals("Keep", prefs.getString("notes", "")); assertNull(db.get("user:layout-test"))
+    }
+    @Test fun aLegacyMissingCustomReferenceCanLaterBeRestored() {
+        db.importUserLayer("""{"format":1,"tags":[{"key":"user:legacy","tag":"kept"}]}""")
+        db.importUserLayer("""{"format":2,"custom_records":[{"key":"user:legacy","kind":"COMMAND","title":"Recovered","target":"echo ok"}]}""")
+        assertEquals("Recovered", db.search("tag:kept type:command").single().title)
+    }
     @Test fun renamingAProviderDocumentPreservesItsOrganization() {
         db.syncSource("saf:root", listOf(record("file:old", "Old", "saf:root", "FILE", "old")))
         db.addTag("file:old", "keep"); db.rename("file:old", "Alias")

@@ -283,7 +283,7 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         }
     }
     selected?.let { doc ->
-        AlertDialog(onDismissRequest = { selected = null }, title = { Text(doc.name) }, text = {
+        WorkspaceDialog(onDismissRequest = { selected = null }, title = { Text(doc.name) }, text = {
             Column {
                 Text(if (doc.directory) "Folder" else "${doc.mime} · ${doc.size} bytes")
                 if (!doc.directory) {
@@ -298,7 +298,7 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         }, confirmButton = { TextButton(onClick = { selected = null }) { Text("Close") } })
     }
     prompt?.let { action ->
-        AlertDialog(onDismissRequest = { prompt = null }, title = { Text(action) }, text = {
+        WorkspaceDialog(onDismissRequest = { prompt = null }, title = { Text(action) }, text = {
             if (action == "Delete") Text("Permanently delete ${selected?.name} and its contents? This cannot be undone.")
             else Column {
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)

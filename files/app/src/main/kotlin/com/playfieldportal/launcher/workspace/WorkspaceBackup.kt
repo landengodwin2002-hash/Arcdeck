@@ -46,13 +46,29 @@ internal object WorkspaceBackup {
         val notes = prefs.optString("notes")
         val panels = prefs.optString("panels", "[]")
         require(notes.length <= 500_000) { "Notes are too large" }
-        require(org.json.JSONArray(panels).length() <= 32) { "Too many saved windows" }
+        val windows = org.json.JSONArray(panels)
+        require(windows.length() <= 32) { "Too many saved windows" }
+        val ids = mutableSetOf<Int>()
+        val tools = setOf("SEARCH", "LIBRARY", "COLLECTIONS", "FILES", "APPS", "TERMINAL", "NOTES", "SYSTEM")
+        for (i in 0 until windows.length()) {
+            val window = windows.getJSONObject(i)
+            require(window.getInt("id") > 0 && ids.add(window.getInt("id"))) { "Invalid window identity" }
+            require(window.getString("tool") in tools) { "Unknown workspace tool" }
+            for (field in listOf("x", "y", "w", "h")) {
+                val value = window.optDouble(field, if (field == "w") 390.0 else if (field == "h") 305.0 else 0.0)
+                require(value.isFinite() && value in -100000.0..100000.0) { "Invalid window geometry" }
+            }
+        }
+        val shortcut = prefs.optInt("workspace_key", android.view.KeyEvent.KEYCODE_F10)
+        require(shortcut in setOf(android.view.KeyEvent.KEYCODE_F10, android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
+            android.view.KeyEvent.KEYCODE_BUTTON_START, android.view.KeyEvent.KEYCODE_BUTTON_THUMBL,
+            android.view.KeyEvent.KEYCODE_BUTTON_THUMBR)) { "Invalid workspace shortcut" }
         val units = prefs.optString("panel_units", "px")
         require(units in setOf("px", "dp"))
         catalog.importUserLayer(root.getJSONObject("catalog").toString())
         check(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit()
             .putString("notes", notes).putString("panels", panels).putString("panel_units", units)
-            .putInt("workspace_key", prefs.optInt("workspace_key", android.view.KeyEvent.KEYCODE_F10))
+            .putInt("workspace_key", shortcut)
             .putBoolean("landscape_prompt", prefs.optBoolean("landscape_prompt", false)).putLong("restore_epoch", System.currentTimeMillis()).commit()) {
             "Organization restored; workspace preferences could not be saved"
         }

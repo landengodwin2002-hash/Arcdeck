@@ -475,7 +475,7 @@ private fun SystemTool(onClose: () -> Unit, onReset: () -> Unit) {
             color = Ice, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
         ListAction("✕  Close workspace") { onClose() }
     }
-    if (editShortcut) AlertDialog(onDismissRequest = { editShortcut = false }, title = { Text("Workspace shortcut") },
+    if (editShortcut) WorkspaceDialog(onDismissRequest = { editShortcut = false }, title = { Text("Workspace shortcut") },
         text = { Column {
             listOf("F10" to android.view.KeyEvent.KEYCODE_F10, "Controller Select" to android.view.KeyEvent.KEYCODE_BUTTON_SELECT,
                 "Controller Start" to android.view.KeyEvent.KEYCODE_BUTTON_START, "L3" to android.view.KeyEvent.KEYCODE_BUTTON_THUMBL,

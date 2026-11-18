@@ -41,7 +41,7 @@ class WorkspaceDocumentsTest {
     @Test fun anUnavailableListingIsNotAnEmptyFolder() {
         assertTrue(documents.children(root).items.isEmpty())
         provider.failQuery = true
-        assertThrows(FileNotFoundException::class.java) { documents.children(root) }
+        assertThrows(IllegalStateException::class.java) { documents.children(root) }
     }
     @Test fun copyUsesStreamsWithoutOverwritingTheSource() = runBlocking {
         val id = provider.createDocument("root", "text/plain", "sample.txt")

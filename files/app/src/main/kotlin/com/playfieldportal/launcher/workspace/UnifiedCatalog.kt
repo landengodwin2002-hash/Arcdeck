@@ -616,7 +616,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
                 val target = o.getString("target")
                 validateCustom(kind, title, target)
                 val existing = get(id)
-                require(existing == null || existing.source == "user") { "Conflicting shortcut identity" }
+                require(existing == null || existing.source == "user" || (existing.source == "import" && existing.missing)) { "Conflicting shortcut identity" }
                 upsert(db, CatalogEntry(id, kind, title, o.optString("subtitle").take(200), target, "user"), now)
             }
             val refs = rows("references", 50000)
