@@ -288,6 +288,7 @@ fun XmbWorkspaceOverlay(
         val pref = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == "restore_epoch" || key == "layout_epoch") {
+                panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey) }
                 panels.clear(); panels.addAll(loadPanels(context))
                 nextId = (panels.maxOfOrNull { it.id } ?: 0) + 1
                 topOrder = (panels.maxOfOrNull { it.order } ?: 0) + 1
