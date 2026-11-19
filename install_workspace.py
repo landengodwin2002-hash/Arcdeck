@@ -233,14 +233,26 @@ def plan_install(repo):
             </intent-filter>
         </activity>
     </application>''')], manifest)
-    for permission in ('SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SPECIAL_USE', 'POST_NOTIFICATIONS'):
+    if 'workspace.WorkspaceStorageProvider' not in text:
+        text = anchored(text, [('    </application>', '''        <provider android:name="com.playfieldportal.launcher.workspace.WorkspaceStorageProvider"
+            android:authorities="${applicationId}.storage" android:exported="true"
+            android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
+        <provider android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku" android:multiprocess="false"
+            android:enabled="true" android:exported="true" android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>''')], manifest)
+    if 'moe.shizuku.manager.permission.API_V23' not in text:
+        text = anchored(text, [('    <application\n', '    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />\n    <application\n')], manifest)
+    for permission in ('MANAGE_EXTERNAL_STORAGE', 'SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SPECIAL_USE', 'POST_NOTIFICATIONS'):
         if f'android.permission.{permission}"' not in text:
             text = anchored(text, [('    <application\n', f'    <uses-permission android:name="android.permission.{permission}" />\n    <application\n')], manifest)
     text = re.sub(r'android:(icon|roundIcon)="[^"]+"', r'android:\1="@mipmap/arcdeck_launcher"', text)
     text = text.replace('android:screenOrientation="sensorLandscape"', 'android:screenOrientation="fullSensor"')
     result[manifest] = text
     text = gradle.read_text(encoding="utf-8-sig")
-    for dep in ('libs.androidx.documentfile', 'libs.coil.compose'):
+    for dep in ('libs.androidx.documentfile', 'libs.coil.compose', '"dev.rikka.shizuku:api:13.1.5"', '"dev.rikka.shizuku:provider:13.1.5"'):
         if f'implementation({dep})' not in text:
             text = anchored(text, [('    implementation(libs.androidx.core.ktx)\n',
                 f'    implementation(libs.androidx.core.ktx)\n    implementation({dep})\n')], gradle)
@@ -272,7 +284,9 @@ def plan_install(repo):
                 'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt',
                 'WorkspaceSpaces.kt', 'WorkspaceSpacePane.kt', 'WorkspaceGameConnections.kt', 'WorkspaceGameConnectionsPane.kt', 'WorkspaceSharing.kt', 'WorkspaceOverlayService.kt',
                 'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt',
-                'WorkspaceWeb.kt', 'WorkspaceAutomation.kt', 'WorkspaceCommandBar.kt', 'WorkspaceInput.kt', 'WorkspaceScripts.kt', 'WorkspaceWindowGeometry.kt'}
+                'WorkspaceWeb.kt', 'WorkspaceAutomation.kt', 'WorkspaceCommandBar.kt', 'WorkspaceInput.kt', 'WorkspaceScripts.kt', 'WorkspaceWindowGeometry.kt',
+                'WorkspaceNative.kt', 'WorkspaceNativeProtocol.kt', 'WorkspaceNativePane.kt', 'ArcDeckNativeService.kt',
+                'WorkspaceAutoLibrary.kt', 'WorkspaceAutoLibraryPane.kt', 'WorkspacePhoneStore.kt', 'WorkspaceStorageProvider.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
     orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'
@@ -286,7 +300,27 @@ def plan_install(repo):
         if path.is_file(): result[repo/'app/src/main/res'/path.relative_to(base/'files/app/src/main/res')] = path.read_text()
     for path in sorted((base/'tests/fixtures').glob('*')):
         if path.is_file(): result[repo/'app/src/test/resources'/path.name] = path.read_text()
-    return result, {activity, manifest, gradle, orientation, paths}
+    originals = {activity, manifest, gradle, orientation, paths}
+    dispatcher = repo / 'feature/feature-launcher/src/main/kotlin/com/playfieldportal/feature/launcher/LaunchDispatcher.kt'
+    if dispatcher.is_file():
+        launch_text = dispatcher.read_text(encoding='utf-8-sig')
+        if '// ArcDeck verified native game window' not in launch_text:
+            launch_text = anchored(launch_text, [('            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))', '''            // ArcDeck verified native game window
+            val nativeBridge = try { Class.forName("com.playfieldportal.launcher.workspace.WorkspaceNativeGameLauncher") }
+                catch (_: ClassNotFoundException) { null }
+            val nativeFuture = nativeBridge?.getMethod("open", Context::class.java, Intent::class.java)
+                ?.invoke(null, context, intent) as? java.util.concurrent.CompletableFuture<*>
+            if (nativeFuture != null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { nativeFuture.get(28, java.util.concurrent.TimeUnit.SECONDS) }
+                resolved?.profile?.takeIf { it.isRetroArchProfile() }?.let { autoCoreMemory.remember(game.platformId, it.id) }
+                markLaunched(game)
+                outcomeRecorder.record(outcomeFor(game, resolved, LaunchOutcomeStatus.SUCCEEDED, reason = null))
+                releaseAmbience()
+                return LaunchDispatchResult.Accepted
+            }
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))''')], dispatcher)
+        result[dispatcher] = launch_text; originals.add(dispatcher)
+    return result, originals
 
 
 def atomic_write(path, data):

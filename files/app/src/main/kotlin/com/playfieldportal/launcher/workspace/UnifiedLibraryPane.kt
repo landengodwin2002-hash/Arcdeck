@@ -124,9 +124,7 @@ internal fun UnifiedLibraryPane(
                 onOpenPfpGame(id)
             }
             "APP" -> {
-                val intent = context.packageManager.getLaunchIntentForPackage(entry.target) ?: error("App is no longer installed")
-                withContext(Dispatchers.IO) { catalog.markOpened(entry.key) }
-                context.startActivity(intent)
+                WorkspaceNativeRequests.open(context, entry.target)
             }
             "FOLDER" -> { onBrowseFolder(entry.target) }
             "FILE" -> {

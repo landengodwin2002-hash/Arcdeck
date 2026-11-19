@@ -46,6 +46,12 @@ class WorkspaceLandscapeTest {
             file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
+    @Test fun discordUsesNativeSetupInsteadOfAWebsiteWhenShizukuIsUnavailable() {
+        compose.setContent { MaterialTheme { WorkspaceNativePane("native:check", "com.discord") } }
+        compose.onNodeWithText("Connect native windows").assertExists()
+        compose.onNodeWithText("Open / install Shizuku").assertExists()
+        compose.onNodeWithText("https://discord.com/app").assertDoesNotExist()
+    }
     @Test fun pfpHasAnEditableCommandBarWithAndroidVoiceInput() {
         compose.setContent { MaterialTheme { WorkspaceCommandBar({}, {}, {}) } }
         compose.onNodeWithText("Search or paste a Termux command").performTextInput("printf 'hello'")

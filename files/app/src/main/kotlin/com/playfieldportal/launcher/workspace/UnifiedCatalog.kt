@@ -285,9 +285,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
     @Synchronized
     fun scanRoot(rootUri: Uri, maxEntries: Int = 12000, maxDepth: Int = 16, cancelled: () -> Boolean = { false }): ScanReport {
         val source = "saf:${rootUri}"
-        val grant = app.contentResolver.persistedUriPermissions.any {
-            it.uri == rootUri && it.isReadPermission
-        }
+        val grant = WorkspaceStorage.hasGrant(app, rootUri)
         if (!grant) {
             setRootStatus(rootUri, "Permission missing; relink folder", false)
             return ScanReport(0, false, "Permission missing")

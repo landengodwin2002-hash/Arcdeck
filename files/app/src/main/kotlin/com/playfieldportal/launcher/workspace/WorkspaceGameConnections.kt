@@ -48,7 +48,7 @@ internal class WorkspaceGameConnections(private val context: Context) {
     fun forget(connection: GameFolderConnection) {
         check(prefs.edit().putString("game_connections", encode(all().filterNot { it == connection })).commit())
     }
-    fun accessible(tree: String): Boolean = context.contentResolver.persistedUriPermissions.any { it.uri.toString() == tree && it.isReadPermission }
+    fun accessible(tree: String): Boolean = WorkspaceStorage.hasGrant(context, Uri.parse(tree))
     fun space(app: GameConnectionApp, catalog: UnifiedCatalog): AppSpace {
         val spaces = WorkspaceSpaces.shared(context)
         return spaces.all().firstOrNull { it.app == app.app } ?: spaces.create(app.name, app.app, catalog)

@@ -102,10 +102,9 @@ import kotlin.math.roundToInt
 /**
  * ArcDeck Workspace, an additive extension to Play Field Portal's existing XMB.
  *
- * NO external Android application is embedded in a fake window. Our windows contain
- * our own UI; Android applications still launch through normal system intents.
- * Files are visible only through an explicitly granted Storage Access Framework tree.
- * Termux execution is opt-in and every command asks for confirmation.
+ * Installed Android apps use private, Shizuku-authorized virtual displays and direct surfaces.
+ * Phone games are organized through a read-only virtual ROM root backed by original files.
+ * Android authorization remains a phone-side setup step; no accounts or app data are cloned.
  *
  * This source file contains no upstream Play Field Portal source code or artwork.
  */
@@ -115,7 +114,7 @@ private enum class Tool(val title: String, val symbol: String) {
     TERMINAL("Terminal", ">_"), NOTES("Notes", "✎"), PFP("PFP features", "⌂"),
     CUSTOMIZE("Customize", "◐"), PREVIEW("Preview", "◉"), SYSTEM("System", "⚙"),
     CHATGPT("ChatGPT", "✦"), DISCORD("Discord", "◉"), MEDIA("Media", "♫"),
-    CLIPBOARD("Clipboard", "▧"), GAMING("Game connections", "▶"), AUTOMATION("Automation", "⇄")
+    CLIPBOARD("Clipboard", "▧"), GAMING("Game connections", "▶"), AUTOMATION("Automation", "⇄"), NATIVE("Installed app", "▦"), AUTOLIB("Phone library", "↻")
 }
 private fun canonical(tool: Tool): Tool = Tool.valueOf(WorkspaceWindowGeometry.canonical(tool.name))
 private fun dockTools() = Tool.entries.filter { it !in setOf(Tool.SEARCH, Tool.APPS, Tool.COLLECTIONS, Tool.PREVIEW) }
@@ -129,8 +128,19 @@ private data class Panel(
     val heightDp: Float = 305f,
     val minimized: Boolean = false,
     val maximized: Boolean = false,
-    val order: Int = 0
-)
+    val order: Int = 0,
+    val nativePackage: String = "",
+    val nativeUser: Int = -1,
+    val nativeTitle: String = "",
+    val nativeIntent: String? = null
+) {
+    val appPackage get() = nativePackage.ifBlank { when (tool) {
+        Tool.CHATGPT -> "com.openai.chatgpt"; Tool.DISCORD -> "com.discord"; Tool.MEDIA -> "com.google.android.youtube"; else -> ""
+    } }
+    val native get() = tool in setOf(Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA)
+    val title get() = nativeTitle.ifBlank { tool.title }
+    val windowKey get() = "native:$id"
+}
 
 
 private val Ink: Color @Composable get() = LocalWorkspaceAppearance.current.ink
@@ -156,9 +166,11 @@ private fun loadPanels(context: Context): List<Panel> {
                 heightDp = item.optDouble("h", 305.0).toFloat().coerceIn(100f, 1200f),
                 minimized = item.optBoolean("min", false),
                 maximized = item.optBoolean("max", false),
-                order = item.optInt("z", i)
+                order = item.optInt("z", i),
+                nativePackage = item.optString("app").takeIf { it.isBlank() || runCatching { NativeProtocol.packageName(it) }.isSuccess }.orEmpty(),
+                nativeUser = item.optInt("user", -1).coerceIn(-1, 9999), nativeTitle = item.optString("title").take(120)
             )
-        }.distinctBy { it.tool }
+        }.distinctBy { if (it.native) "native:${it.appPackage}:${it.nativeUser}" else it.tool.name }
     }.getOrDefault(emptyList())
 }
 
@@ -170,6 +182,7 @@ private fun savePanels(context: Context, panels: List<Panel>) {
             put("x", p.x); put("y", p.y)
             put("w", p.widthDp); put("h", p.heightDp)
             put("min", p.minimized); put("max", p.maximized); put("z", p.order)
+            put("app", p.nativePackage); put("user", p.nativeUser); put("title", p.nativeTitle)
         })
     }
     context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
@@ -223,7 +236,6 @@ fun XmbWorkspaceOverlay(
     var queuedQuery by remember { mutableStateOf("") }; var queryRequest by remember { mutableStateOf(0) }
     var layoutRequest by remember { mutableStateOf("") }
     var adjusting by remember { mutableStateOf<Int?>(null) }
-    val webHistory = remember { WorkspaceWebHistory() }
     val catalog = remember { UnifiedCatalog.shared(context) }
     var catalogRevision by remember { mutableStateOf(0) }
     var catalogError by remember { mutableStateOf<String?>(null) }
@@ -234,12 +246,13 @@ fun XmbWorkspaceOverlay(
     var resumeRevision by remember { mutableStateOf(0) }
     DisposableEffect(lifecycleOwner, catalog) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) resumeRevision++
+            if (event == Lifecycle.Event.ON_RESUME) { resumeRevision++; WorkspaceNative.refresh(); WorkspaceAutoLibrary.schedule(context); WorkspaceAutoLibrary.kickoff(context) }
             if (event == Lifecycle.Event.ON_START) launcherActive = true
             if (event == Lifecycle.Event.ON_STOP) {
                 launcherActive = false
                 WorkspaceIndexing.cancel()
                 WorkspaceWebPolicy.suspendAll()
+                WorkspaceNative.suspendAll(); WorkspaceAutoLibrary.stopForeground()
                 if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("pause_scripts", true) && !WorkspaceAutomation.connected(context)) TermuxBridge.pauseManaged(context)
             }
             if (event == Lifecycle.Event.ON_PAUSE) savePanels(context, panels.toList())
@@ -249,6 +262,7 @@ fun XmbWorkspaceOverlay(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
+    LaunchedEffect(Unit) { WorkspaceNative.initialize(context); WorkspaceAutoLibrary.schedule(context); WorkspaceAutoLibrary.kickoff(context) }
     LaunchedEffect(games) {
         val snapshot = games ?: return@LaunchedEffect
         workspaceResult { withContext(Dispatchers.IO) { catalog.syncPfpGames(snapshot) } }
@@ -308,12 +322,37 @@ fun XmbWorkspaceOverlay(
     }
     fun minimize(panel: Panel) {
         if (panel.tool == Tool.TERMINAL) TermuxBridge.pauseManaged(context)
+        if (panel.native) WorkspaceNative.detach(panel.windowKey)
         update(panel.id) { it.copy(minimized = true) }
     }
     fun close(panel: Panel) {
         if (panel.tool == Tool.TERMINAL) TermuxBridge.stopManaged(context)
+        if (panel.native) WorkspaceNative.close(panel.windowKey)
         panels.removeAll { it.id == panel.id }
         paneState.removeState("${panel.tool.name}:${panel.id}")
+    }
+    val nativeRequests by WorkspaceNativeRequests.requests.collectAsState()
+    LaunchedEffect(nativeRequests) {
+        nativeRequests.forEach { request -> request.target?.let { target ->
+            val old = panels.firstOrNull { it.native && it.appPackage == target.pkg && (it.nativeUser < 0 || it.nativeUser == target.user) }
+            if (old != null) {
+                if (request.intent != null) WorkspaceNative.close(old.windowKey)
+                update(old.id) { it.copy(minimized = false, nativePackage = target.pkg, nativeUser = target.user,
+                    nativeTitle = target.title, nativeIntent = request.intent, order = topOrder++) }
+            } else {
+                panels.add(Panel(nextId++, Tool.NATIVE, 20f, 64f, maximized = configuration.screenWidthDp < 600 && appearance.maximizePhone,
+                    order = topOrder++, nativePackage = target.pkg, nativeUser = target.user, nativeTitle = target.title, nativeIntent = request.intent))
+            }
+        } }
+        if (nativeRequests.isNotEmpty() && !expanded) onToggle()
+        WorkspaceNativeRequests.acknowledge(nativeRequests.map { it.serial }.toSet())
+    }
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences("arcdeck_workspace", 0)
+        if (context.applicationContext is dagger.hilt.internal.GeneratedComponentManager<*> && !prefs.getBoolean("native_setup_140", false)) {
+            activate(Tool.AUTOLIB); prefs.edit().putBoolean("native_setup_140", true).apply()
+            if (!expanded) onToggle()
+        }
     }
     val controls by WorkspaceControls.requests.collectAsState()
     LaunchedEffect(controls) {
@@ -328,10 +367,10 @@ fun XmbWorkspaceOverlay(
         if (show && !expanded) onToggle()
         WorkspaceControls.acknowledge(controls.map { it.serial }.toSet())
     }
-    LaunchedEffect(expanded) { if (!expanded) TermuxBridge.pauseManaged(context) }
+    LaunchedEffect(expanded) { if (!expanded) { TermuxBridge.pauseManaged(context); WorkspaceNative.suspendAll() } }
 
     LaunchedEffect(externalRequest.serial) {
-        if (externalRequest.serial > 0) activate(Tool.entries.firstOrNull { it.name == externalRequest.tool } ?: Tool.SPACES)
+        if (externalRequest.serial > 0 && externalRequest.tool != "NATIVE_PENDING") activate(Tool.entries.firstOrNull { it.name == externalRequest.tool } ?: Tool.SPACES)
     }
     fun preview(uri: String) { previewUri = uri; activate(Tool.PREVIEW) }
     CompositionLocalProvider(LocalWorkspaceAppearance provides appearance,
@@ -452,7 +491,7 @@ fun XmbWorkspaceOverlay(
                                     .padding(start = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(panel.tool.symbol + "  " + panel.tool.title.uppercase(),
+                                Text(panel.tool.symbol + "  " + panel.title.uppercase(),
                                     Modifier.weight(1f), color = Ice, fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold)
                                 FrameControl("⋮") { adjusting = panel.id }
@@ -515,10 +554,14 @@ fun XmbWorkspaceOverlay(
                                     Tool.AUTOMATION -> WorkspaceAutomationPane(catalog)
                                     Tool.GAMING -> WorkspaceGameConnectionsPane(catalog, { activate(Tool.SPACES) },
                                         { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, { onOpenPfpFeature("library") })
-                                    Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA -> if (launcherActive) WorkspaceWebPane(WorkspaceWebsite.valueOf(panel.tool.name), webHistory)
-                                        else Text("Web window suspended while ArcDeck is in the background")
+                                    Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA -> if (launcherActive) WorkspaceNativePane(
+                                        panel.windowKey, panel.appPackage, panel.nativeUser, panel.nativeIntent, focused = active?.id == panel.id,
+                                        onSelect = { app -> update(panel.id) { it.copy(nativePackage = app.pkg, nativeUser = app.user, nativeTitle = app.title, nativeIntent = null) } })
+                                        else Text("Native window suspended while ArcDeck is in the background")
+                                    Tool.AUTOLIB -> WorkspaceAutoLibraryPane(catalog,
+                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, { onOpenPfpFeature("library") })
                                     Tool.SYSTEM -> SystemTool(onClose, onSystemUiChanged) {
-                                        panels.clear()
+                                        panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey) }; panels.clear()
                                         panels.add(Panel(nextId++, Tool.LIBRARY, 12f, 64f, maximized = configuration.screenWidthDp < 600))
                                     }
                                 }

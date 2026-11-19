@@ -1,4 +1,14 @@
-# ArcDeck 1.3 phone checks
+# ArcDeck 1.4 phone checks
+
+1. Install the matching 1.4 edition over 1.3 without uninstalling. Allow phone storage from Phone library; start/authorize Shizuku and connect native windows. Try denied access and disconnected/rebooted Shizuku; setup must remain usable and Open installed app normally must work.
+2. Open Discord and ChatGPT. Confirm they are the installed apps and use their existing signed-in profiles. Select another accessible Android profile, where available. Test keyboard, voice typing, Back, scrolling, copy/paste, attachment pickers and in-app navigation. These require the actual phone and accounts.
+3. Tile Discord, ChatGPT and YouTube in landscape; overlap/drag/resize, minimize/reopen, maximize another window, rotate and leave/return. Check focus and touch stay in the selected app. Close one native window without ending another. Try an unsupported/secure app; report failure instead of showing a website. Background audio and protected content remain app/account-dependent.
+4. Discover existing phone games. Confirm ROMs appear in the matching PFP consoles and originals/saves remain in place. Test unique formats, ambiguous ISO/ZIP files, CUE/BIN/audio companions, M3U disc sets, removable storage and an opaque third-party document provider. Revoke a source and ensure its cached organization survives. Test cancellation/restart during a long directory scan.
+5. Check automatically detected Papaya/GameHub external files and linked app spaces. Confirm namespaces for real Steam/local ID exports, correct launcher selection with multiple GameHub variants, repeat-import deduplication and source-file preservation. Unknown private databases must not be rewritten.
+6. Launch a ROM/GameHub export from PFP with Shizuku connected. Confirm the actual emulator task appears inside the native panel and does not generate an external-foreground failure. Test missing emulator, URI permission loss and an app rejecting secondary displays. Specialized non-scalar launch intents/harvested launcher shortcuts retain normal Android launching.
+7. Keep the original checks below for scripts, files, backups, spaces, original PFP features and recovery to another Home launcher. Measure CPU/memory with your actual simultaneous apps; JVM tests are not a device benchmark.
+
+## Earlier feature checks
 
 1. Install the matching edition over 1.2 without uninstalling. Existing spaces, notes, games and folder permissions should remain.
 2. In Spaces → Game connections, check that Papaya and the actual GameHub Lite variant are detected. A real spoof-name app such as AnTuTu must not be identified as GameHub.
@@ -34,8 +44,4 @@ Update the signed 1.0 APK directly; keep its data and permissions. Test these ad
 
 The release has a different package identity from the earlier debug APK. Its private signing backup supports future updates to this release identity; it does not replace the official PlayFieldPortal signing key.
 
-1.3 physical-phone checks: open the new PFP command bar with your usual Android keyboard and its microphone; paste a short harmless Termux command, review it and check captured output. Test the clipboard pad with ChatGPT/Discord. Verify your own service logins in their web windows; external-app authentication, voice calls and YouTube background play may require their native apps/account features.
-
-Tile ChatGPT, Discord and Media side by side in landscape. Resize by the larger grip and sliders; scroll both dock and taskbar. Minimize/reopen each window, maximize another window, rotate the device, show/hide the keyboard and leave/return to ArcDeck. Expect unloaded pages to restore history, not unsaved form drafts. Check that media stops when its web window unloads. Native background audio remains controlled by that native app.
-
-Start a disposable managed `sleep 120` command, pause/resume it, leave ArcDeck, reopen it, then stop the run. Clear finished history while another run is active and verify its controls remain. Only enable Automation if you want to test scripts; use the copied curl example, two successive window opens followed by tiling, and clipboard text. If testing optional accessibility, allow a disposable app and check tap/swipe/focused-field text; reject a different frontmost package and password input. Screen-off, notification Stop and Revoke token must end the connection. CPU, memory, real-site playback and device-specific keyboard behavior require profiling on the actual phone and are not claimed from JVM tests.
+Use the PFP command bar with the normal Android keyboard and voice input. Paste a harmless Termux command, review it and check captured output. Test managed script pause/resume/stop and optional authenticated Automation as described in SCRIPT_CONNECTION.md. Native app background work remains Android-managed.

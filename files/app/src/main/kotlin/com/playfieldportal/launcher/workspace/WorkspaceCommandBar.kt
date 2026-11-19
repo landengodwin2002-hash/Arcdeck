@@ -40,7 +40,7 @@ object WorkspaceInputFocus { @Volatile var editing = false }
             TextButton(onClick = { onTool("TERMINAL") }) { Text(">_") }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            listOf("Library" to "LIBRARY", "ChatGPT" to "CHATGPT", "Discord" to "DISCORD", "Media" to "MEDIA",
+            listOf("Library" to "LIBRARY", "Apps" to "NATIVE", "Phone library" to "AUTOLIB", "ChatGPT" to "CHATGPT", "Discord" to "DISCORD", "Media" to "MEDIA",
                 "App spaces" to "SPACES", "Papaya / GameHub" to "GAMING", "Android" to "SYSTEM").forEach { (label, tool) ->
                 TextButton(onClick = { onTool(tool) }) { Text(label) }
             }

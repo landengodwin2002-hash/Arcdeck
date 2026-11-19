@@ -101,9 +101,8 @@ internal object WorkspaceApps {
         val intent = context.packageManager.getLaunchIntentForPackage(space.app) ?: error("Connected app is not installed")
         WorkspaceSpaces.shared(context).select(space.id)
         WorkspaceProfiles.apply(context, space.profile)
-        if (adjacent) intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK)
-        else intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        if (adjacent) context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK))
+        else { WorkspaceNativeRequests.open(context, space.app); WorkspaceRequests.open(context, space.id, "NATIVE") }
     }
     fun copy(context: Context, text: String) {
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("ArcDeck space", text))

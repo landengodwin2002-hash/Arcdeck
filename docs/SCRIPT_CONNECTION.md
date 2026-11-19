@@ -6,12 +6,12 @@ To control the launcher from a script, open **Automation → Start script connec
 
 | JSON body | Result |
 | --- | --- |
-| `{"op":"window","action":"open","tool":"CHATGPT"}` | Open the ChatGPT web window |
-| `{"op":"window","action":"open","tool":"DISCORD"}` | Open the Discord web window |
-| `{"op":"window","action":"open","tool":"MEDIA"}` | Open the Media web window |
+| `{"op":"window","action":"open","tool":"CHATGPT"}` | Open the installed ChatGPT window |
+| `{"op":"window","action":"open","tool":"DISCORD"}` | Open the installed Discord window |
+| `{"op":"window","action":"open","tool":"MEDIA"}` | Open the installed media-app window |
 | `{"op":"window","action":"tile","layout":"side"}` | Tile active windows side by side |
 | `{"op":"window","action":"tile","layout":"grid"}` | Arrange windows in a grid |
-| `{"op":"window","action":"minimize","tool":"CHATGPT"}` | Minimize and unload that web window |
+| `{"op":"window","action":"minimize","tool":"CHATGPT"}` | Minimize and suspend that native window |
 | `{"op":"window","action":"close","tool":"TERMINAL"}` | Close Terminal and stop managed scripts |
 | `{"op":"window","action":"stop"}` | Suspend windows and stop managed scripts |
 | `{"op":"clipboard","text":"Text for another app"}` | Copy text, without reading the clipboard |
