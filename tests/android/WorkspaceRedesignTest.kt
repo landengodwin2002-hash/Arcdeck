@@ -2,7 +2,9 @@ package com.playfieldportal.launcher.workspace
 
 import android.app.Application
 import android.content.Context
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
@@ -107,6 +109,14 @@ class WorkspaceRedesignTest {
             assertEquals(listOf("91"), catalog.search("type:game platform:psp").map { it.target })
             assertTrue(UnifiedQuery.parse("platform:bad/value").invalid.isNotEmpty())
         } finally { catalog.close() }
+    }
+    @Test fun theCatalogStillShowsItsListInsideAShortLandscapeWindow() {
+        compose.setContent { MaterialTheme { Box(Modifier.size(620.dp, 245.dp)) { WorkspacePapayaPane({}) } } }
+        compose.waitUntil(15000) { compose.onAllNodesWithText("Android").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Android").assertIsDisplayed()
+        compose.onNodeWithText("Platforms").performClick()
+        compose.onNodeWithText("Emulators").performClick()
+        compose.onNodeWithText("Find platform or emulator").assertIsDisplayed()
     }
     @Test fun importedRecipesPassTheRealLauncherValidator() {
         val raw = context.assets.open("emulator_kb/emulators.json").bufferedReader().use { it.readText() }

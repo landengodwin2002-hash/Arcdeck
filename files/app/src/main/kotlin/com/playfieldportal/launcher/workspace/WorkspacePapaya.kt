@@ -45,18 +45,31 @@ internal data class PapayaCatalog(val platforms: List<PapayaPlatform>, val emula
     var installedOnly by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { workspaceResult { withContext(Dispatchers.IO) { PapayaCatalog.load(context) } }
         .onSuccess { catalog = it }.onFailure { error = it.message ?: "Catalog unavailable" } }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val compact = maxHeight < 360.dp
+    var viewMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Papaya compatibility catalog", style = MaterialTheme.typography.titleMedium)
-        Text("Public presets adapted into ArcDeck's existing emulator system. Papaya app data stays in Papaya.", style = MaterialTheme.typography.bodySmall)
+        Text(if (compact) "Papaya presets" else "Papaya compatibility catalog", style = MaterialTheme.typography.titleMedium)
+        if (!compact) Text("Public presets adapted into ArcDeck's existing emulator system. Papaya app data stays in Papaya.", style = MaterialTheme.typography.bodySmall)
         val data = catalog
         if (data == null) { if (error.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth()) else Text(error); return@Column }
         Text("${data.platforms.size} platforms · ${data.emulators.size} recipes · ${data.additions} compatible additions", style = MaterialTheme.typography.labelSmall)
-        WorkspaceScrollableRow {
+        if (!compact) WorkspaceScrollableRow {
             listOf("Platforms", "Emulators", "Streaming").forEach { name -> FilterChip(tab == name, { tab = name }, label = { Text(name) }) }
             TextButton(onClick = { onPfp("category:settings") }) { Text("Configure launchers") }
         }
-        OutlinedTextField(query, { query = it.take(100) }, label = { Text("Find platform or emulator") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        if (tab == "Emulators") Row { Checkbox(installedOnly, { installedOnly = it }); Text("Installed packages only", Modifier.padding(top = 12.dp)) }
+        Row(Modifier.fillMaxWidth()) {
+            OutlinedTextField(query, { query = it.take(100) }, label = { Text("Find platform or emulator") }, singleLine = true, modifier = Modifier.weight(1f))
+            if (compact) Box {
+                TextButton(onClick = { viewMenu = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text(tab) }
+                DropdownMenu(viewMenu, { viewMenu = false }) {
+                    listOf("Platforms", "Emulators", "Streaming").forEach { name -> DropdownMenuItem(text = { Text(name) }, onClick = { tab = name; viewMenu = false }) }
+                    DropdownMenuItem(text = { Text(if (installedOnly) "Show all recipes" else "Installed packages only") }, onClick = { installedOnly = !installedOnly; viewMenu = false })
+                    DropdownMenuItem(text = { Text("Configure launchers") }, onClick = { viewMenu = false; onPfp("category:settings") })
+                }
+            }
+        }
+        if (tab == "Emulators" && !compact) Row { Checkbox(installedOnly, { installedOnly = it }); Text("Installed packages only", Modifier.padding(top = 12.dp)) }
         LazyColumn(Modifier.weight(1f)) {
             when (tab) {
                 "Platforms" -> items(data.platforms.filter { it.name.contains(query, true) || it.key.contains(query, true) }, key = { it.key }) { p ->
@@ -69,5 +82,6 @@ internal data class PapayaCatalog(val platforms: List<PapayaPlatform>, val emula
                 else -> items(data.streaming.filter { it.contains(query, true) }) { app -> ListItem(headlineContent = { Text(app) }) }
             }
         }
+    }
     }
 }
