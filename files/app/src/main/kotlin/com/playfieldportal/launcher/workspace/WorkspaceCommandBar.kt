@@ -3,6 +3,8 @@ package com.playfieldportal.launcher.workspace
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -46,7 +48,10 @@ object WorkspaceInputFocus { @Volatile var editing = false }
         if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.labelSmall)
     }
     review?.let { value -> WorkspaceDialog({ review = null }, { Text("Run in Termux") }, {
-        Column(Modifier.heightIn(max = 150.dp)) { Text(value.take(4000)); Text("Output appears in the launcher terminal. Managed scripts pause when the launcher is left.") }
+        Column(Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState())) {
+            SelectionContainer { Text(value) }
+            Text("Output appears in the launcher terminal. Managed scripts pause when the launcher is left, unless an explicit automation session is active.")
+        }
     }, { TextButton(onClick = {
         review = null
         if (context.checkSelfPermission(TermuxBridge.PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) permission.launch(TermuxBridge.PERMISSION)

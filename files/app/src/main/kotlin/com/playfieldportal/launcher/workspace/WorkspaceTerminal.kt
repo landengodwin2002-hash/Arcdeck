@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,10 +44,14 @@ internal object TermuxBridge {
 
     private fun save(context: Context, runs: List<TerminalRun>) {
         val rows = JSONArray()
-        runs.take(20).forEach { rows.put(JSONObject().put("id", it.id).put("command", it.command)
+        retain(runs).forEach { rows.put(JSONObject().put("id", it.id).put("command", it.command)
             .put("status", it.status).put("output", it.output.takeLast(100000))
             .put("exit", it.exitCode ?: JSONObject.NULL).put("managed", it.managed)) }
         prefs(context).edit().putString("history", rows.toString()).apply()
+    }
+    internal fun retain(runs: List<TerminalRun>): List<TerminalRun> {
+        val active = setOf("Running", "Paused", "Stopping")
+        return (runs.filter { it.status in active } + runs.filterNot { it.status in active }).take(20)
     }
 
     @Synchronized
@@ -187,7 +192,7 @@ internal fun WorkspaceTerminalPane(initialCommand: String?, requestId: Int = 0) 
     review?.let { reviewed ->
         val reviewedInteractive = interactive
         WorkspaceDialog(onDismissRequest = { review = null }, title = { Text("Run this command in Termux?") },
-            text = { Column { Text(reviewed, fontFamily = FontFamily.Monospace)
+            text = { Column(Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState())) { SelectionContainer { Text(reviewed, fontFamily = FontFamily.Monospace) }
                 Text(if (reviewedInteractive) "Opens an interactive Termux session." else "Runs in the background and returns output to this window.") } },
             confirmButton = { TextButton(onClick = {
                 review = null

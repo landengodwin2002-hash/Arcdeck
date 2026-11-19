@@ -25,6 +25,13 @@ class WorkspaceTerminalTest {
     }
     private fun result(id: String, output: String) = Intent().setData(Uri.parse("arcdeck://termux/$id"))
         .putExtra("result", Bundle().apply { putString("stdout", output); putInt("err", -1); putInt("exitCode", 0) })
+    @Test fun activeRunControlsSurviveManyNewerCompletedCommands() {
+        val finished = (1..25).map { TerminalRun("finished-$it", "echo $it", "Completed") }
+        val active = TerminalRun("long-running", "sleep 120", "Paused", managed = true)
+        val kept = TermuxBridge.retain(finished + active)
+        assertEquals(20, kept.size); assertTrue(kept.any { it.id == active.id && it.managed })
+        assertEquals("finished-1", kept[1].id)
+    }
     @Test fun resultsAreAssociatedWithTheExactPendingRun() {
         WorkspaceTermuxReceiver().onReceive(context, result("known-nonce", "hello"))
         val run = TermuxBridge.history(context).single()
