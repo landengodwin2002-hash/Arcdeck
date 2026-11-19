@@ -20,9 +20,9 @@ internal object WorkspaceScripts {
             trap 'kill -KILL -- -"§arcdeck_pid" 2>/dev/null; rm -f "§HOME/.arcdeck/runs/$id" "§HOME/.arcdeck/runs/$id.start"' EXIT
             $readIdentity
             [[ §{arcdeck_fields[2]} == "§arcdeck_pid" ]] || { kill "§arcdeck_pid"; exit 5; }
-            printf '%s %s\n' "§arcdeck_pid" "§{arcdeck_fields[19]}" > "§HOME/.arcdeck/runs/$id"
             printf 'start\n' > "§HOME/.arcdeck/runs/$id.start"
             rm -f "§HOME/.arcdeck/runs/$id.start"
+            printf '%s %s\n' "§arcdeck_pid" "§{arcdeck_fields[19]}" > "§HOME/.arcdeck/runs/$id"
             wait -f "§arcdeck_pid"
             arcdeck_exit=§?
             rm -f "§HOME/.arcdeck/runs/$id"

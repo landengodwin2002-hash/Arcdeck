@@ -4,11 +4,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UnifiedQueryTest {
-    @Test fun portraitIsTheDefaultAndExplicitLandscapeIsPreserved() {
-        assertEquals(com.playfieldportal.core.domain.model.ScreenOrientationMode.FOLLOW_DEVICE,
-            com.playfieldportal.core.domain.model.ScreenOrientationMode.fromName(null))
+    @Test fun landscapeIsTheDefaultAndExplicitFollowDeviceIsPreserved() {
         assertEquals(com.playfieldportal.core.domain.model.ScreenOrientationMode.LANDSCAPE,
-            com.playfieldportal.core.domain.model.ScreenOrientationMode.fromName("LANDSCAPE"))
+            com.playfieldportal.core.domain.model.ScreenOrientationMode.fromName(null))
+        assertEquals(com.playfieldportal.core.domain.model.ScreenOrientationMode.FOLLOW_DEVICE,
+            com.playfieldportal.core.domain.model.ScreenOrientationMode.fromName("FOLLOW_DEVICE"))
     }
     @Test fun quotedFilterValuesAndUnicodeArePreserved() {
         val q = UnifiedQuery.parse("in:\"My Games\" tag:\"Action RPG\" type:game 最终 幻想")

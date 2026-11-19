@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -341,6 +343,7 @@ fun XmbWorkspaceOverlay(
         val viewportHeight = maxHeight.value
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val keyboardShown = WindowInsets.ime.getBottom(density) > 0
         LaunchedEffect(layoutRequest) {
             if (layoutRequest.isNotBlank()) {
                 val visible = panels.filterNot { it.minimized }.sortedBy { it.order }
@@ -377,7 +380,7 @@ fun XmbWorkspaceOverlay(
                 if (indexStatus.isNotBlank()) Text(indexStatus,
                     Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp).background(Tab).padding(6.dp),
                     color = Ice, fontSize = 11.sp, maxLines = 1)
-                Row(
+                if (!keyboardShown) Row(
                     Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(24.dp))
                         .background(Tab).border(1.dp, Line, RoundedCornerShape(24.dp))
@@ -404,17 +407,18 @@ fun XmbWorkspaceOverlay(
 
                 val active = panels.filterNot { it.minimized }.maxByOrNull { it.order }
                 panels.sortedBy { it.order }.forEach { panel ->
-                    if (!panel.minimized && (active?.maximized != true || active?.id == panel.id)) {
+                    if (!panel.minimized && ((active?.maximized != true && !keyboardShown) || active?.id == panel.id)) {
+                        val effectiveMax = panel.maximized || keyboardShown
                         val widthDp = min(panel.widthDp, viewportWidth - 6f).coerceAtLeast(100f)
                         val heightDp = min(panel.heightDp, viewportHeight - 114f).coerceAtLeast(100f)
                         val actualWidth = with(density) { widthDp.dp.toPx() }
                         val actualHeight = with(density) { heightDp.dp.toPx() }
-                        val top = with(density) { 62.dp.toPx() }
-                        val bottom = with(density) { 52.dp.toPx() }
-                        val x = if (panel.maximized) 0f else with(density) { panel.x.dp.toPx() }.coerceIn(0f, max(0f, screenWidthPx - actualWidth))
-                        val y = if (panel.maximized) top else with(density) { panel.y.dp.toPx() }.coerceIn(top, max(top, screenHeightPx - actualHeight - bottom))
-                        val drawWidth = if (panel.maximized) viewportWidth.dp else widthDp.dp
-                        val drawHeight = if (panel.maximized) (viewportHeight - 114f).coerceAtLeast(100f).dp else heightDp.dp
+                        val top = with(density) { (if (keyboardShown) 0 else 62).dp.toPx() }
+                        val bottom = with(density) { (if (keyboardShown) 0 else 52).dp.toPx() }
+                        val x = if (effectiveMax) 0f else with(density) { panel.x.dp.toPx() }.coerceIn(0f, max(0f, screenWidthPx - actualWidth))
+                        val y = if (effectiveMax) top else with(density) { panel.y.dp.toPx() }.coerceIn(top, max(top, screenHeightPx - actualHeight - bottom))
+                        val drawWidth = if (effectiveMax) viewportWidth.dp else widthDp.dp
+                        val drawHeight = if (effectiveMax) (viewportHeight - if (keyboardShown) 0f else 114f).coerceAtLeast(100f).dp else heightDp.dp
 
                         Column(
                             Modifier.zIndex(1f + panel.order)
@@ -435,8 +439,8 @@ fun XmbWorkspaceOverlay(
                             Row(
                                 Modifier.fillMaxWidth().height(48.dp)
                                     .background(appearance.surface)
-                                    .pointerInput(panel.id, panel.maximized) {
-                                        if (!panel.maximized) detectDragGestures { change, delta ->
+                                    .pointerInput(panel.id, effectiveMax) {
+                                        if (!effectiveMax) detectDragGestures { change, delta ->
                                             change.consume()
                                             update(panel.id) { p -> p.copy(
                                                 x = (p.x + with(density) { delta.x.toDp().value }).coerceIn(0f, max(0f, viewportWidth - widthDp)),
@@ -519,7 +523,7 @@ fun XmbWorkspaceOverlay(
                                 }
                             }
                             }
-                            if (!panel.maximized) {
+                            if (!effectiveMax) {
                                 Box(
                                     Modifier.align(Alignment.End).size(44.dp)
                                         .pointerInput(panel.id) {
@@ -539,7 +543,7 @@ fun XmbWorkspaceOverlay(
                     }
                 }
 
-                WorkspaceScrollableRow(
+                if (!keyboardShown) WorkspaceScrollableRow(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
                         .clip(RoundedCornerShape(16.dp)).background(Tab)
                         .padding(horizontal = 8.dp, vertical = 3.dp),
