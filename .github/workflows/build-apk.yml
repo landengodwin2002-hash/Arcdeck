@@ -43,6 +43,7 @@ jobs:
         run: |
           cd arcdeck
           python3 test_installer.py
+          python3 -m unittest discover -s tests/python
           python3 scripts/prepare_build.py ../upstream --build-number "$GITHUB_RUN_NUMBER"
           sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
       - name: Run real Android database, document provider and Compose tests
@@ -86,7 +87,7 @@ jobs:
           repository: JohnnyCollado/PlayFieldPortal
           ref: 5ee271ea9545685417aecdd13b5ace033cdb7806
           path: upstream
-          lfs: ${{ matrix.flavor == 'full' }}
+          lfs: false
           persist-credentials: false
       - name: Set up Java
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
@@ -104,16 +105,6 @@ jobs:
         run: |
           python3 arcdeck/scripts/prepare_build.py upstream --build-number "$GITHUB_RUN_NUMBER"
           sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
-          if [ '${{ matrix.flavor }}' = 'full' ]; then
-            sdkmanager --install 'ndk;27.0.12077973' 'cmake;3.22.1'
-            python3 - <<'PY'
-          from pathlib import Path
-          from zipfile import is_zipfile
-          for name in ('discord_partner_sdk.aar', 'discord_partner_sdk_krisp.aar'):
-              path = Path('upstream/discord/discord-native/libs') / name
-              if not is_zipfile(path): raise SystemExit(f'Missing SDK bytes: {path}')
-          PY
-          fi
       - name: Build optimized unsigned release APK
         working-directory: upstream
         run: |
@@ -130,13 +121,13 @@ jobs:
           apks = list(Path(f'upstream/app/build/outputs/apk/{flavor}/release').glob('*.apk'))
           if len(apks) != 1: raise SystemExit(f'Expected one APK, got {apks}')
           out = Path('dist'); out.mkdir()
-          apk = out / f'ArcDeck-1.4.0-{flavor}-unsigned.apk'
+          apk = out / f'ArcDeck-1.5.0-{flavor}-unsigned.apk'
           shutil.copy2(apks[0], apk)
           digest = hashlib.sha256(apk.read_bytes()).hexdigest()
           (out / 'build-info.json').write_text(json.dumps({
               'arcdeck_commit': os.environ['GITHUB_SHA'],
               'upstream_commit': '5ee271ea9545685417aecdd13b5ace033cdb7806',
-              'version': '1.4.0', 'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
+              'version': '1.5.0', 'flavor': flavor, 'build_number': os.environ['GITHUB_RUN_NUMBER'],
               'sha256': digest, 'signing': 'unsigned; owner signs locally',
               'tests': 'Android database, documents and phone UI regression suite passed',
               'physical_device_tested': False
@@ -147,7 +138,7 @@ jobs:
       - name: Upload release for owner signing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ArcDeck-1.4.0-${{ matrix.flavor }}-unsigned
+          name: ArcDeck-1.5.0-${{ matrix.flavor }}-unsigned
           path: dist/*
           if-no-files-found: error
           retention-days: 30

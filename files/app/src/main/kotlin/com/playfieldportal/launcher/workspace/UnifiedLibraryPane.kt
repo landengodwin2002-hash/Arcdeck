@@ -60,15 +60,23 @@ internal fun UnifiedLibraryPane(
     onOpenPfpFeature: (String) -> Unit = {},
     onSpaceCreated: () -> Unit = {},
     queryRequest: Int = 0,
+    gameArt: List<com.playfieldportal.core.domain.model.Game> = emptyList(),
 ) {
     val context = LocalContext.current
     val compactHeight = LocalConfiguration.current.screenHeightDp < 500
     var viewMenu by remember { mutableStateOf(false) }
+    var layoutOptions by remember { mutableStateOf(false) }
+    val browserKey = if (initialQuery == "type:game") "Games" else if (initialQuery == "type:app") "Apps" else "Library"
+    var browse by remember(browserKey) { mutableStateOf(runCatching { WorkspaceBrowserPreferences.get(context, browserKey, browserKey == "Games") }.getOrDefault(WorkspaceBrowseStyle())) }
+    val latestBrowse by rememberUpdatedState(browse)
+    DisposableEffect(browserKey) { onDispose { WorkspaceBrowserPreferences.save(context, browserKey, latestBrowse) } }
+    LaunchedEffect(browse) { delay(450); WorkspaceBrowserPreferences.save(context, browserKey, browse) }
+    val artById = remember(gameArt) { gameArt.associateBy { it.id } }
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val revision by catalog.revision.collectAsState()
     var query by rememberSaveable { mutableStateOf(initialQuery) }
-    var grid by rememberSaveable { mutableStateOf(initialQuery == "type:app") }
+    var grid by rememberSaveable { mutableStateOf(browse.mode != "List") }
     LaunchedEffect(queryRequest) { if (queryRequest > 0) { query = initialQuery; grid = initialQuery == "type:app" } }
     var page by remember(query, revision, sourceRevision) { mutableIntStateOf(0) }
     var results by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
@@ -171,6 +179,7 @@ internal fun UnifiedLibraryPane(
                 listOf("All" to "", "Games" to "type:game", "Apps" to "type:app", "Files" to "source:files", "Recent" to "sort:recent").forEach { (label, filter) ->
                     TextButton(onClick = { query = filter; grid = filter == "type:app"; showCollections = false; viewMenu = false }) { Text(label) }
                 }
+                TextButton(onClick = { layoutOptions = true; viewMenu = false }) { Text("Layout & artwork") }
                 TextButton(onClick = { grid = !grid; viewMenu = false }) { Text(if (grid) "List view" else "Grid view") }
                 TextButton(onClick = { showCollections = !showCollections; viewMenu = false }) { Text("Collections & storage") }
                 TextButton(onClick = { pickRoot.launch(null); viewMenu = false }) { Text("Add folder") }
@@ -180,6 +189,13 @@ internal fun UnifiedLibraryPane(
             }
         }
         }
+        if (browserKey == "Games" && gameArt.isNotEmpty()) WorkspaceScrollableRow {
+            val platform = UnifiedQuery.parse(query).platform
+            FilterChip(platform == null, { query = "type:game" }, label = { Text("All platforms") })
+            gameArt.map { it.platformId }.distinct().sorted().forEach { id ->
+                FilterChip(platform == id, { query = "type:game platform:$id" }, label = { Text(id.uppercase()) })
+            }
+        }
         if (!compactHeight) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             listOf("All" to "", "Games" to "type:game", "Apps" to "type:app", "Files" to "source:files",
@@ -187,6 +203,7 @@ internal fun UnifiedLibraryPane(
                 .forEach { (label, filter) -> FilterChip(selected = query == filter && !showCollections,
                     onClick = { query = filter; showCollections = false; if (filter == "type:app") grid = true }, label = { Text(label) }) }
             FilterChip(grid, { grid = !grid }, label = { Text(if (grid) "Grid" else "List") })
+            TextButton(onClick = { layoutOptions = true }) { Text("Layout & artwork") }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { focus.clearFocus(); showCollections = !showCollections }) { Text(if (showCollections) "Search" else "Collections & storage") }
@@ -243,17 +260,9 @@ internal fun UnifiedLibraryPane(
             }
         } else {
             if (!compactHeight) Text("${results.size}${if (hasMore) "+" else ""} results", style = MaterialTheme.typography.labelSmall)
-            if (grid) LazyVerticalGrid(columns = GridCells.Adaptive(96.dp), modifier = Modifier.weight(1f)) {
-                items(results, key = { it.key }) { entry ->
-                    Column(Modifier.padding(4.dp).fillMaxWidth().heightIn(min = 100.dp)
-                        .combinedClickable(onClick = { open(entry) }, onLongClick = { selected = entry }).padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        CatalogArtwork(entry)
-                        Text(entry.alias ?: entry.title, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                if (hasMore) item { TextButton(onClick = { page++ }) { Text("Load more") } }
-            } else LazyColumn(Modifier.weight(1f)) {
+            if (grid) WorkspaceLibraryGallery(results, artById,
+                browse.copy(mode = if (browse.mode == "Carousel") "Carousel" else "Grid"),
+                Modifier.weight(1f), hasMore, { page++ }, { open(it) }, { selected = it }) else LazyColumn(Modifier.weight(1f)) {
                 items(results, key = { it.key }) { entry ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Row(Modifier.weight(1f).clickable(enabled = !busy) { open(entry) }.padding(vertical = 7.dp),
@@ -276,6 +285,27 @@ internal fun UnifiedLibraryPane(
             }
         }
     }
+    if (layoutOptions) WorkspaceDialog({ layoutOptions = false }, { Text("Library layout and artwork") }, {
+        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Presentation")
+            WorkspaceScrollableRow { WorkspaceBrowseStyle.modes.forEach { mode ->
+                FilterChip((if (grid) browse.mode else "List") == mode, { browse = browse.copy(mode = mode); grid = mode != "List" }, label = { Text(mode) })
+            } }
+            Text("Artwork")
+            WorkspaceScrollableRow { WorkspaceBrowseStyle.art.forEach { art ->
+                FilterChip(browse.artwork == art, { browse = browse.copy(artwork = art) }, label = { Text(art) })
+            } }
+            Text("Artwork size")
+            Slider(browse.size, { browse = browse.copy(size = it) }, valueRange = 84f..240f)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(browse.titleAbove, { browse = browse.copy(titleAbove = it) }); Text("Titles above artwork")
+            }
+            Text("Carousel alignment")
+            WorkspaceScrollableRow { listOf("Top", "Center", "Bottom").forEach { alignment ->
+                FilterChip(browse.alignment == alignment, { browse = browse.copy(alignment = alignment) }, label = { Text(alignment) })
+            } }
+        }
+    }, { TextButton(onClick = { layoutOptions = false }) { Text("Done") } })
     selected?.takeIf { confirm == null }?.let { entry ->
         var alias by remember(entry.key) { mutableStateOf(entry.alias ?: "") }
         var title by remember(entry.key) { mutableStateOf(entry.title) }

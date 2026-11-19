@@ -38,12 +38,14 @@ internal object WorkspaceBackup {
             .put("spaces", prefs.getString("spaces", "[]"))
             .put("game_connections", prefs.getString("game_connections", "[]"))
             .put("active_space", prefs.getString("active_space", ""))
+            .put("space_sessions", prefs.getString("space_sessions", "{}"))
+            .put("library_views", prefs.getString("library_views", "{}"))
             .put("system_bars", prefs.getBoolean("system_bars", false))
             .put("auto_index", prefs.getBoolean("auto_index", true))
             .put("command_bar", prefs.getBoolean("command_bar", true)).put("pause_scripts", prefs.getBoolean("pause_scripts", true))
             .put("landscape_first", prefs.getBoolean("landscape_first", true))
             .put("phone_auto_library", prefs.getBoolean("phone_auto_library", true))
-        return JSONObject().put("format", "arcdeck-workspace").put("version", 2)
+        return JSONObject().put("format", "arcdeck-workspace").put("version", 3)
             .put("catalog", JSONObject(catalog.exportUserLayer())).put("preferences", preferences).toString(2)
             .also { require(it.length <= MAX_CHARS) { "Backup exceeds 20 MB" } }
     }
@@ -52,7 +54,7 @@ internal object WorkspaceBackup {
         require(raw.length <= MAX_CHARS) { "Backup exceeds 20 MB" }
         val root = JSONObject(raw)
         if (root.optString("format") != "arcdeck-workspace") { catalog.importUserLayer(raw); return }
-        require(root.getInt("version") in 1..2) { "Unknown workspace backup version" }
+        require(root.getInt("version") in 1..3) { "Unknown workspace backup version" }
         val prefs = root.optJSONObject("preferences") ?: JSONObject()
         val current = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         val notes = prefs.optString("notes")
@@ -63,6 +65,8 @@ internal object WorkspaceBackup {
         val profiles = prefs.optString("profiles", current.getString("profiles", "[]")); WorkspaceProfiles.validate(profiles)
         val spaces = prefs.optString("spaces", current.getString("spaces", "[]")); val decodedSpaces = WorkspaceSpaces.decode(spaces)
         val active = prefs.optString("active_space", current.getString("active_space", ""))
+        val sessions = prefs.optString("space_sessions", "{}"); WorkspaceSessions.validate(sessions)
+        val libraryViews = prefs.optString("library_views", "{}"); WorkspaceBrowserPreferences.validate(libraryViews)
         val connections = prefs.optString("game_connections", current.getString("game_connections", "[]"))
         WorkspaceGameConnections.decode(connections)
         require(active.isBlank() || decodedSpaces.any { it.id == active }) { "Unknown active space" }
@@ -76,6 +80,7 @@ internal object WorkspaceBackup {
         check(context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).edit()
             .putString("notes", notes).putString("panels", panels).putString("panel_units", units)
             .putString("appearance", appearance).putString("profiles", profiles).putString("spaces", spaces).putString("active_space", active)
+            .putString("space_sessions", sessions).putString("library_views", libraryViews)
             .putString("game_connections", connections)
             .putBoolean("system_bars", prefs.optBoolean("system_bars", current.getBoolean("system_bars", false)))
             .putBoolean("auto_index", prefs.optBoolean("auto_index", current.getBoolean("auto_index", true)))
@@ -94,11 +99,14 @@ internal object WorkspaceBackup {
         val windows = org.json.JSONArray(panels)
         require(windows.length() <= 32) { "Too many saved windows" }
         val ids = mutableSetOf<Int>()
-        val tools = setOf("SEARCH", "LIBRARY", "COLLECTIONS", "FILES", "APPS", "TERMINAL", "NOTES", "SYSTEM", "SPACES", "CUSTOMIZE", "PFP", "PREVIEW", "CHATGPT", "DISCORD", "MEDIA", "CLIPBOARD", "GAMING", "AUTOMATION", "NATIVE", "AUTOLIB")
+        val tools = setOf("SEARCH", "LIBRARY", "COLLECTIONS", "FILES", "APPS", "GAMES", "PRESETS", "TERMINAL", "NOTES", "SYSTEM", "SPACES", "CUSTOMIZE", "PFP", "PREVIEW", "CHATGPT", "DISCORD", "MEDIA", "CLIPBOARD", "GAMING", "AUTOMATION", "NATIVE", "AUTOLIB")
         for (i in 0 until windows.length()) {
             val window = windows.getJSONObject(i)
             require(window.getInt("id") > 0 && ids.add(window.getInt("id"))) { "Invalid window identity" }
             require(window.getString("tool") in tools) { "Unknown workspace tool" }
+            require(!window.has("instance") || window.getString("instance").matches(Regex("[A-Za-z0-9_-]{1,64}"))) { "Invalid window instance" }
+            val scale = window.optDouble("appScale", 1.0)
+            require(scale.isFinite() && scale in 0.75..1.25) { "Invalid app text scale" }
             val app = window.optString("app"); if (app.isNotBlank()) NativeProtocol.packageName(app)
             require(window.optInt("user", -1) in -1..9999 && window.optString("title").length <= 120) { "Invalid native app profile" }
             for (field in listOf("x", "y", "w", "h")) {

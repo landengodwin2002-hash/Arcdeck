@@ -1,10 +1,24 @@
-# ArcDeck Workspace 1.4
+# ArcDeck Workspace 1.5
 
 An Android home launcher and windowed workspace built on PlayFieldPortal 1.3.3. Games, installed apps, approved storage folders, files, command shortcuts and system tools share one searchable library and organization system.
 
+## 1.5 desktop and browsing update
+
+ArcDeck now opens to an editable main menu with direct Games, Apps, Library, Files, Terminal, Spaces and Android tools. One control bar combines menu access, running windows, command entry and arrangement; place it at the top, bottom, left or right. The command bar no longer reserves 112dp above the original interface.
+
+Console pages, game details and PFP editors open inside a managed workspace window. Freeform windows remain draggable and resizable. Fullscreen hides the surrounding controls and exposes a small return strip; Windowed restores the prior bounds. Native apps use the physical-phone keyboard by default, preserve display aspect and have independent text scaling.
+
+Games and apps share the same index while retaining direct views. Choose carousel, grid or list, six artwork treatments, artwork size, title placement and carousel alignment. `platform:psp` and other platform filters select the actual mirrored platform rather than matching a game title. Per-space window arrangements and browser appearance are included in version-3 backups; old backups remain readable.
+
+The public Papaya catalog is pinned to commit `fbe96e0ea3c5100f65f31e397e8e23c1412a6b8e`: 52 platforms, 433 emulator recipes and 14 streaming apps. The compatibility pane exposes these definitions; six compatible standalone recipes augment the existing emulator knowledge base. Existing PFP recipes, RetroArch core detection, PC launcher adapters and user choices retain precedence. The original platform file-extension lists are not broadened by generic Papaya ZIP/TXT/PNG rules. MIT attribution ships with the data. Papaya's Android application and private database are not bundled.
+
+PFP Social sign-in, Shiba Coins routes and the native Discord SDK are removed from both editions. Installed Discord remains a normal native app. Four native display slots remain the simultaneous limit; an inactive display can be released when another space needs a slot. Arrangement restoration does not guarantee another app preserves every internal screen or unsaved field.
+
+This update is validated by automated regressions and release checks; actual phone app compatibility, keyboard behavior and CPU/battery use still require device testing.
+
 ## Landscape multitasking and scripts
 
-1.3 adds a native command/search bar above PFP, with direct Library, ChatGPT, Discord, Media, game connections and Android controls. Library now owns search, installed apps and games together; the Apps filter uses an icon grid. Old Search/Apps/Collections window references converge on this one destination. Landscape mode is enabled by default and can be disabled under System. Android's keyboard, its voice typing and an optional speech-recognition button provide text input. Physical typing in the command bar is routed to the text field instead of PFP controller mappings.
+1.3 adds a native command/search bar above PFP, with direct Library, ChatGPT, Discord, Media, game connections and Android controls. Library now owns search, installed apps and games together; the Apps filter uses an icon grid. Old Search/Collections references converge on Library; Apps and Games have direct filtered views of the same index. Landscape mode is enabled by default and can be disabled under System. Android's keyboard, its voice typing and an optional speech-recognition button provide text input. Physical typing in the command bar is routed to the text field instead of PFP controller mappings.
 
 1.4 replaces the ChatGPT, Discord and Media website panels with installed Android app windows. Library's Apps grid and **Open app** in a space also request native windows. **Apps** opens a picker for any launchable installed app and any Android profile made available through LauncherApps. These are the original apps using their existing account/data; ArcDeck does not duplicate installations or transfer accounts. Choose another accessible profile from **App / profile**. Login accounts inside an app remain managed by that app.
 
@@ -46,7 +60,7 @@ Use another app's Android **Share → Save to ArcDeck** action to choose a desti
 
 The main workspace hosts native Android activities on Shizuku-owned virtual displays. The optional floating WS bubble is a separate notes/files/space overlay. **Open adjacent** still requests Android split-screen; Android and the target app decide whether to honor it.
 
-**PFP features** exposes the real original categories, library manager, notifications, player status, icons and layout/color editors. The permanent **PFP** dock action returns to the exact previous original screen. If an original dialog is active, finish/close it before switching sections; the workspace preserves it rather than discarding an edit.
+**Console & editors** hosts the original categories, library manager, notifications, icons and layout/color editors inside an ArcDeck window. If an original dialog is active, finish/close it before switching sections; the workspace preserves it rather than discarding an edit.
 
 **Customize** controls palette, opacity, dimming, corners, text scale, dock order/visibility, compact controls and default window sizing. Named layout profiles save geometry and appearance. System can expose Android status/navigation bars, native Internet/volume panels, app information and launcher app shortcuts (shortcut access requires the default Home role).
 
@@ -54,15 +68,15 @@ Files supports multi-selection, batch copy/cut/paste/share/delete, shared tags, 
 
 ## Editions
 
-- **Full:** PlayFieldPortal game launching, XMB, artwork, themes and Discord Social SDK, plus the complete ArcDeck workspace.
-- **Lite:** the same workspace and game launcher without the native Discord Social SDK.
+- **Full:** the complete ArcDeck workspace and PFP game, media, artwork and theme tools. Native Discord SDK removed; preserves the existing Full package ID.
+- **Lite:** the same workspace and game launcher with the existing Lite package ID. Neither edition includes the native Discord Social SDK.
 - Android 10 or later. Package IDs `dev.arcdeck.workspace` and `dev.arcdeck.workspace.lite` keep ArcDeck separate from the official launcher and earlier debug builds.
 
 The owner signs the optimized release APKs with a private, reusable signing key. CI artifacts ending in **unsigned.apk** require signing before installation. Never install an unsigned artifact as if it were the finished download.
 
 ## Using the workspace
 
-Tap **WS** or press **F10**. **System** lets you choose a different controller shortcut. On phones, windows open maximized; on larger screens they can be dragged, resized, minimized and restored from the taskbar. Portrait use is supported, and the XMB landscape reminder is optional.
+ArcDeck opens to **Menu**. **System** lets you choose a keyboard/controller shortcut. Windows can be dragged, resized, minimized, maximized or opened full screen; the control bar restores running windows. Default phone sizing is configurable. Portrait use is supported, and the XMB landscape reminder is optional.
 
 - **Library / Search / Apps:** one index with game artwork and app icons; prefix search; type/source/favorite/pinned/recent/missing filters; aliases and tags; manual collection order; editable smart collections; editable website and command shortcuts.
 - **Collections & storage:** connect storage folders, index them, browse them, rescan or remove them from the index. Removing a root does not delete its files. Game records remain owned by PlayFieldPortal.
@@ -87,7 +101,7 @@ cd upstream
 ./gradlew :app:assembleLiteRelease
 ```
 
-Use JDK 17, Android Platform `37.0`, Build Tools `37.0.0`. Full also needs upstream Git LFS SDK files, NDK `27.0.12077973` and CMake `3.22.1`. The workflow provisions these dependencies.
+Use JDK 17, Android Platform `37.0`, Build Tools `37.0.0`. The Discord SDK/LFS/NDK requirement is removed. Both editions use the same test-gated release pipeline.
 
 To sign locally, restore the private signing directory and run:
 

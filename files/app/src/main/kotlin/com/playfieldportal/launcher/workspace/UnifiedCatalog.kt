@@ -396,6 +396,12 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
                 if (source == "files" || source == "saf") "r.source LIKE ?" else "r.source=?"
             })
         }
+        if (parsed.platform != null) {
+            // PFP's projection begins every game subtitle with its exact platform ID.
+            conditions.add("r.source='pfp' AND r.kind IN ('GAME','SHORTCUT') AND (r.subtitle=? OR substr(r.subtitle,1,length(?))=?)")
+            val prefix = "${parsed.platform} · "
+            args.add(parsed.platform); args.add(prefix); args.add(prefix)
+        }
         if (parsed.showMissing != null) {
             conditions.add("r.missing=?"); args.add(flag(parsed.showMissing).toString())
         } else conditions.add("r.missing=0")

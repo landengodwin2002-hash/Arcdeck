@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 UPSTREAM_SHA = '5ee271ea9545685417aecdd13b5ace033cdb7806'
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 
 
 def prepare(project, number):
@@ -25,7 +25,7 @@ def prepare(project, number):
     for pattern, replacement in [
         (r'\bapplicationId = "[^"\n]+"', 'applicationId = "dev.arcdeck.workspace"'),
         (r'\bversionName = "[^"\n]+"', f'versionName = "{VERSION}"'),
-        (r'\bversionCode = \d+', f'versionCode = {14000+number}'),
+        (r'\bversionCode = \d+', f'versionCode = {15000+number}'),
     ]:
         source, count = re.subn(pattern,replacement,source,count=1)
         if count!=1: raise SystemExit(f'Expected one build identity anchor: {pattern}')
@@ -48,7 +48,7 @@ tasks.withType<Test>().configureEach {{
         path=project/f'app/src/{variant}/res/values/arcdeck.xml'
         path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(f'<?xml version="1.0" encoding="utf-8"?>\n<resources><string name="app_name">{label}</string></resources>\n')
-    print(f'Prepared ArcDeck {VERSION}, versionCode={14000+number}, applicationId=dev.arcdeck.workspace')
+    print(f'Prepared ArcDeck {VERSION}, versionCode={15000+number}, applicationId=dev.arcdeck.workspace')
 
 
 if __name__=='__main__':

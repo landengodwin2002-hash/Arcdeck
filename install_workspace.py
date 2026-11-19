@@ -57,7 +57,7 @@ MAIN_EDITS = [('import com.playfieldportal.launcher.discord.DiscordBootstrap\n',
   '            }\n'
   '            return true\n'
   '        }\n'
-  '        if (workspaceShowing) {\n'
+  '        if (workspaceShowing && !com.playfieldportal.launcher.workspace.WorkspaceInputFocus.pfpActive) {\n'
   '            if (event.action == KeyEvent.ACTION_UP &&\n'
   '                (event.keyCode == KeyEvent.KEYCODE_BACK ||\n'
   '                 event.keyCode == KeyEvent.KEYCODE_ESCAPE ||\n'
@@ -71,10 +71,11 @@ MAIN_EDITS = [('import com.playfieldportal.launcher.discord.DiscordBootstrap\n',
   '        if (com.playfieldportal.launcher.workspace.WorkspaceInputFocus.editing || currentFocus?.onCheckIsTextEditor() == true) return super.dispatchKeyEvent(event)\n'
   '        // Let the gamepad handler process it first; fall back to normal dispatch\n'),
  ('        if (gamepadInputHandler.onMotionEvent(event)) return true\n',
-  '        if (workspaceShowing) return super.onGenericMotionEvent(event)\n'
+  '        if (workspaceShowing && !com.playfieldportal.launcher.workspace.WorkspaceInputFocus.pfpActive) return super.onGenericMotionEvent(event)\n'
   '        if (gamepadInputHandler.onMotionEvent(event)) return true\n')]
 
-HOST_BLOCK = '''                            com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }
+HOST_BLOCK = '''                            // ArcDeck unified desktop host.
+                            if (!workspaceShowing) com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }
                             // ArcDeck managed host integration.
                             val arcDeckGames by remember(arcDeckGameRepository) { arcDeckGameRepository.observeAll() }.collectAsState(initial = null)
                             val arcDeckPfpState by xmbViewModel.uiState.collectAsState()
@@ -84,6 +85,8 @@ HOST_BLOCK = '''                            com.playfieldportal.launcher.workspa
                                 onClose = { workspaceShowing = false },
                                 onSound = { menuSoundPlayer.play(it) },
                                 games = arcDeckGames,
+                                pfpContent = { AppXmbHost() },
+                                backgroundPath = arcDeckPfpState.customWallpaperPath,
                                 onSetPfpFavorite = { id, favorite ->
                                     lifecycleScope.launch {
                                         try { arcDeckGameRepository.setFavorite(id, favorite) }
@@ -91,10 +94,11 @@ HOST_BLOCK = '''                            com.playfieldportal.launcher.workspa
                                         catch (e: Exception) { android.widget.Toast.makeText(this@MainActivity, e.message ?: "Could not update favorite", android.widget.Toast.LENGTH_LONG).show() }
                                     }
                                 },
-                                onOpenPfpGame = { id -> workspaceShowing = false; xmbViewModel.openGameDetailFromSettings(id) },
+                                onOpenPfpGame = { id -> workspaceShowing = true; com.playfieldportal.launcher.workspace.WorkspaceRequests.publish("PFP"); xmbViewModel.openGameDetailFromSettings(id) },
                                 pfpSections = arcDeckPfpState.categories.map { it.id to it.name },
                                 onOpenPfpFeature = { feature ->
-                                    workspaceShowing = false
+                                    workspaceShowing = true
+                                    com.playfieldportal.launcher.workspace.WorkspaceRequests.publish("PFP")
                                     if (feature == "original") { /* Preserve the exact original PFP screen. */ }
                                     else if (arcDeckPfpState.hasBlockingOverlay) {
                                         android.widget.Toast.makeText(this@MainActivity, "Close the current PFP dialog to switch sections", android.widget.Toast.LENGTH_LONG).show()
@@ -120,7 +124,7 @@ MAIN_EDITS[3] = (MAIN_EDITS[3][0], HOST_BLOCK)
 ACTIVITY_REQUESTS = '''    // ArcDeck external navigation accepts UI destinations, never executable commands.
     private fun handleArcDeckIntent(request: Intent) {
         val game = request.getLongExtra("arcdeck_game_id", -1)
-        if (game > 0) { workspaceShowing = false; xmbViewModel.openGameDetailFromSettings(game) }
+        if (game > 0) { workspaceShowing = true; com.playfieldportal.launcher.workspace.WorkspaceRequests.publish("PFP"); xmbViewModel.openGameDetailFromSettings(game) }
         else if (request.getBooleanExtra("arcdeck_open_workspace", false)) {
             workspaceShowing = true
             com.playfieldportal.launcher.workspace.WorkspaceRequests.publish(request.getStringExtra("arcdeck_tool") ?: "SPACES")
@@ -161,8 +165,9 @@ def plan_install(repo):
             first = text.index(marker)
             last = text.index(base_comment, first) + len(base_comment)
             text = text[:first] + MAIN_EDITS[4][1] + text[last:]
-        host_start = '                            com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }\n'
-        start = text.index(host_start) if host_start in text else text.index('                            AppXmbHost()\n')
+        host_start = '                            // ArcDeck unified desktop host.\n'
+        legacy_host = '                            com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }\n'
+        start = text.index(host_start) if host_start in text else text.index(legacy_host) if legacy_host in text else text.index('                            AppXmbHost()\n')
         match = re.search(r'^                            \)\n', text[start:], re.M)
         if not match: raise RuntimeError('ArcDeck host integration was not found')
         last = start + match.end()
@@ -272,6 +277,7 @@ def plan_install(repo):
 ''')], gradle)
     text = text.replace('    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n        targetSdk = 36\n    }',
         '    testOptions {\n        unitTests { isIncludeAndroidResources = true }\n    }')
+    text = text.replace('    "fullImplementation"(project(":discord:discord-native"))\n', '')
     result[gradle] = text
     paths = repo / 'app/src/main/res/xml/file_paths.xml'
     if not paths.is_file(): raise RuntimeError('Missing FileProvider paths')
@@ -286,7 +292,7 @@ def plan_install(repo):
                 'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt',
                 'WorkspaceWeb.kt', 'WorkspaceAutomation.kt', 'WorkspaceCommandBar.kt', 'WorkspaceInput.kt', 'WorkspaceScripts.kt', 'WorkspaceWindowGeometry.kt',
                 'WorkspaceNative.kt', 'WorkspaceNativeProtocol.kt', 'WorkspaceNativePane.kt', 'ArcDeckNativeService.kt',
-                'WorkspaceAutoLibrary.kt', 'WorkspaceAutoLibraryPane.kt', 'WorkspacePhoneStore.kt', 'WorkspaceStorageProvider.kt'}
+                'WorkspaceAutoLibrary.kt', 'WorkspaceAutoLibraryPane.kt', 'WorkspacePhoneStore.kt', 'WorkspaceStorageProvider.kt', 'WorkspacePresentation.kt', 'WorkspaceWindowFrame.kt', 'WorkspaceFullscreen.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
     orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'
@@ -298,6 +304,8 @@ def plan_install(repo):
         result[repo/'app/src/test/kotlin/com/playfieldportal/launcher/workspace'/path.name] = path.read_text()
     for path in sorted((base/'files/app/src/main/res').rglob('*')):
         if path.is_file(): result[repo/'app/src/main/res'/path.relative_to(base/'files/app/src/main/res')] = path.read_text()
+    for path in sorted((base/'files/app/src/main/assets').rglob('*')):
+        if path.is_file(): result[repo/'app/src/main/assets'/path.relative_to(base/'files/app/src/main/assets')] = path.read_text()
     for path in sorted((base/'tests/fixtures').glob('*')):
         if path.is_file(): result[repo/'app/src/test/resources'/path.name] = path.read_text()
     originals = {activity, manifest, gradle, orientation, paths}
@@ -320,6 +328,19 @@ def plan_install(repo):
             }
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))''')], dispatcher)
         result[dispatcher] = launch_text; originals.add(dispatcher)
+    from legacy_features import plan_removals
+    removed = plan_removals(repo)
+    originals.update(path for path in removed if path.is_file())
+    result.update(removed)
+    from papaya_presets import plan_catalog
+    papaya = plan_catalog(repo, base)
+    originals.update(path for path in papaya if path.is_file())
+    result.update(papaya)
+    # Native focus mode temporarily hides system bars, preserving the normal preference on return.
+    result[activity] = result[activity].replace('private var workspaceShowing by mutableStateOf(false)', 'private var workspaceShowing by mutableStateOf(true)')
+    result[activity] = result[activity].replace(
+        'if (getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("system_bars", false))',
+        'if (!com.playfieldportal.launcher.workspace.WorkspacePresentation.immersive && getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("system_bars", false))')
     return result, originals
 
 

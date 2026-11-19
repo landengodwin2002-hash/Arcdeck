@@ -104,7 +104,7 @@ import kotlinx.coroutines.withContext
         TextButton(onClick = { WorkspaceRequests.publish("GAMING") }) { Text("Papaya and GameHub connections") }
         TextButton(onClick = { WorkspaceRequests.publish("SYSTEM") }) { Text("Android quality of life controls") }
         sections.forEach { (id, title) -> TextButton(onClick = { open("category:$id") }) { Text(title) } }
-        listOf("Library manager" to "library", "PFP notifications and jobs" to "notifications", "Player status" to "player",
+        listOf("Library manager" to "library", "PFP notifications and jobs" to "notifications",
             "Original icon editor" to "icons", "Original XMB layout editor" to "layout", "Original color picker" to "colors").forEach { (title, id) ->
             TextButton(onClick = { open(id) }) { Text(title) }
         }

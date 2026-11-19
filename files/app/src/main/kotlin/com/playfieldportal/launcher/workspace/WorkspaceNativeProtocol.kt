@@ -25,7 +25,7 @@ internal object NativeProtocol {
     }
     fun user(id: Int): Int = id.also { require(it in 0..9999) { "Invalid Android profile" } }
     fun dimensions(width: Int, height: Int, density: Int) {
-        require(width in 128..2560 && height in 128..2560 && width.toLong() * height <= 4_000_000 && density in 120..480) { "Window size is outside the rendering budget" }
+        require(width in 128..2560 && height in 128..2560 && width.toLong() * height <= 4_000_000 && density in 120..640) { "Window size is outside the rendering budget" }
     }
     fun call(binder: IBinder, request: JSONObject, surface: Surface? = null): JSONObject {
         val data = Parcel.obtain(); val reply = Parcel.obtain()

@@ -12,14 +12,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
-object WorkspaceInputFocus { @Volatile var editing = false }
+object WorkspaceInputFocus { @Volatile var editing = false; @Volatile var pfpActive = false }
 
 @Composable fun PfpWorkspaceHost(content: @Composable () -> Unit) {
-    val bar = workspaceFlag("command_bar", true)
-    Box(Modifier.fillMaxSize().padding(top = if (bar) 112.dp else 0.dp)) { content() }
+    Box(Modifier.fillMaxSize()) { content() }
 }
 
-@Composable internal fun WorkspaceCommandBar(onSearch: (String) -> Unit, onTerminal: (String) -> Unit, onTool: (String) -> Unit) {
+@Composable internal fun WorkspaceCommandBar(onSearch: (String) -> Unit, onTerminal: (String) -> Unit, onTool: (String) -> Unit, showShortcuts: Boolean = true) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("arcdeck_terminal", 0) }
     var command by remember { mutableStateOf(prefs.getString("bar_draft", "") ?: "") }
@@ -39,7 +38,7 @@ object WorkspaceInputFocus { @Volatile var editing = false }
             TextButton(enabled = command.isNotBlank(), onClick = { review = command }) { Text("Run") }
             TextButton(onClick = { onTool("TERMINAL") }) { Text(">_") }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        if (showShortcuts) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             listOf("Library" to "LIBRARY", "Apps" to "NATIVE", "Phone library" to "AUTOLIB", "ChatGPT" to "CHATGPT", "Discord" to "DISCORD", "Media" to "MEDIA",
                 "App spaces" to "SPACES", "Papaya / GameHub" to "GAMING", "Android" to "SYSTEM").forEach { (label, tool) ->
                 TextButton(onClick = { onTool(tool) }) { Text(label) }

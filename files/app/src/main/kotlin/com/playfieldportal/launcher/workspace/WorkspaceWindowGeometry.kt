@@ -19,5 +19,5 @@ internal object WorkspaceWindowGeometry {
         return WorkspaceBounds((index % columns) * w + 3, top + (index / columns) * h,
             (w - 6).coerceAtLeast(80f), (h - 5).coerceAtLeast(70f))
     }
-    fun canonical(tool: String): String = if (tool in setOf("SEARCH", "APPS", "COLLECTIONS")) "LIBRARY" else tool
+    fun canonical(tool: String): String = if (tool in setOf("SEARCH", "COLLECTIONS")) "LIBRARY" else tool
 }

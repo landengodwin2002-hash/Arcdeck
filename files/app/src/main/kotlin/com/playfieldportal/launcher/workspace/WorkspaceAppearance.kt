@@ -14,16 +14,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
-internal data class WorkspaceAppearance(val palette: String = "Ice", val opacity: Float = 0.95f, val dim: Float = 0.4f,
+internal data class WorkspaceAppearance(val palette: String = "Graphite", val opacity: Float = 0.98f, val dim: Float = 0.4f,
     val corners: Float = 15f, val font: Float = 1f, val compact: Boolean = false, val maximizePhone: Boolean = true,
-    val dockOrder: List<String> = emptyList(), val hidden: Set<String> = emptySet(), val customAccent: String = "", val motionMs: Int = 120) {
+    val dockOrder: List<String> = emptyList(), val hidden: Set<String> = emptySet(), val customAccent: String = "", val motionMs: Int = 100,
+    val dockPosition: String = "Top", val nativeFullscreen: Boolean = false) {
     val accent get() = if (customAccent.matches(Regex("#[A-Fa-f0-9]{6}"))) Color(0xFF000000 or customAccent.drop(1).toLong(16))
-        else Color(when (palette) { "Violet" -> 0xFFCAA6FF; "Forest" -> 0xFF91DEB4; "Sunset" -> 0xFFFFBF8A; "Graphite" -> 0xFFD0D7E2; else -> 0xFF75BEFF })
+        else Color(when (palette) { "Violet" -> 0xFFCAA6FF; "Forest" -> 0xFF91DEB4; "Sunset" -> 0xFFFFBF8A; "Graphite" -> 0xFF9EE4C6; else -> 0xFF75BEFF })
     val ink get() = Color(when (palette) { "Violet" -> 0xFF241A3E; "Forest" -> 0xFF102D2A; "Sunset" -> 0xFF392325; "Graphite" -> 0xFF1F232B; else -> 0xFF11203D }).copy(alpha = opacity)
     val surface get() = Color(when (palette) { "Violet" -> 0xFF35284F; "Forest" -> 0xFF1B423B; "Sunset" -> 0xFF4F3334; "Graphite" -> 0xFF303640; else -> 0xFF1E3B60 }).copy(alpha = opacity)
     fun json(): String = JSONObject().put("palette", palette).put("opacity", (opacity * 1000).roundToInt() / 1000.0).put("dim", (dim * 1000).roundToInt() / 1000.0)
         .put("corners", (corners * 1000).roundToInt() / 1000.0).put("font", (font * 1000).roundToInt() / 1000.0).put("compact", compact).put("maximizePhone", maximizePhone)
-        .put("dockOrder", JSONArray(dockOrder)).put("hidden", JSONArray(hidden.toList())).put("customAccent", customAccent).put("motionMs", motionMs).toString()
+        .put("dockOrder", JSONArray(dockOrder)).put("hidden", JSONArray(hidden.toList())).put("customAccent", customAccent).put("motionMs", motionMs)
+        .put("dockPosition", dockPosition).put("nativeFullscreen", nativeFullscreen).toString()
     companion object {
         val palettes = listOf("Ice", "Violet", "Forest", "Sunset", "Graphite")
         fun parse(raw: String): WorkspaceAppearance {
@@ -35,12 +37,13 @@ internal data class WorkspaceAppearance(val palette: String = "Ice", val opacity
                 val a = j.optJSONArray(key) ?: JSONArray(); require(a.length() <= 24)
                 return (0 until a.length()).map { a.getString(it).also { n -> require(n.matches(Regex("[A-Z_]{1,24}"))) } }.distinct()
             }
-            val palette = j.optString("palette", "Ice"); require(palette in palettes)
+            val palette = j.optString("palette", "Graphite"); require(palette in palettes)
             val custom = j.optString("customAccent"); require(custom.isEmpty() || custom.matches(Regex("#[A-Fa-f0-9]{6}")))
-            return WorkspaceAppearance(palette, number("opacity", 0.95, 0.65..1.0), number("dim", 0.4, 0.0..0.8),
+            return WorkspaceAppearance(palette, number("opacity", 0.98, 0.65..1.0), number("dim", 0.4, 0.0..0.8),
                 number("corners", 15.0, 0.0..28.0), number("font", 1.0, 0.85..1.35), j.optBoolean("compact"),
                 j.optBoolean("maximizePhone", true), names("dockOrder"), names("hidden").filterNot { it in setOf("PFP", "CUSTOMIZE") }.toSet(), custom,
-                j.optInt("motionMs", 120).also { require(it in 0..400) })
+                j.optInt("motionMs", 100).also { require(it in 0..400) },
+                j.optString("dockPosition", "Top").also { require(it in setOf("Top", "Bottom", "Left", "Right")) }, j.optBoolean("nativeFullscreen", false))
         }
     }
 }
@@ -107,6 +110,11 @@ internal object WorkspaceProfiles {
     fun change(value: WorkspaceAppearance) { prefs.edit().putString("appearance", value.json()).apply() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Make this workspace yours", style = MaterialTheme.typography.titleMedium)
+        Text("Control bar position")
+        WorkspaceScrollableRow { listOf("Top", "Bottom", "Left", "Right").forEach { position ->
+            FilterChip(style.dockPosition == position, { change(style.copy(dockPosition = position)) }, label = { Text(position) })
+        } }
+        Row { Checkbox(style.nativeFullscreen, { change(style.copy(nativeFullscreen = it)) }); Text("Open installed apps full screen", Modifier.padding(top = 12.dp)) }
         WorkspaceAppearance.palettes.forEach { palette -> FilterChip(style.palette == palette, { change(style.copy(palette = palette, customAccent = "")) }, label = { Text(palette) }) }
         OutlinedTextField(customAccent, { value -> customAccent = value.take(7); if (value.isEmpty() || value.matches(Regex("#[A-Fa-f0-9]{6}"))) change(style.copy(customAccent = value)) },
             label = { Text("Custom accent #RRGGBB") }, singleLine = true)
@@ -117,7 +125,7 @@ internal object WorkspaceProfiles {
         Text("Window animation ${style.motionMs} ms"); Slider(style.motionMs.toFloat(), { change(style.copy(motionMs = it.toInt())) }, valueRange = 0f..400f)
         Row { Checkbox(style.compact, { change(style.copy(compact = it)) }); Text("Compact dock and controls", Modifier.padding(top = 12.dp)) }
         Row { Checkbox(style.maximizePhone, { change(style.copy(maximizePhone = it)) }); Text("Maximize new phone windows", Modifier.padding(top = 12.dp)) }
-        Text("Dock order and visibility", style = MaterialTheme.typography.titleSmall)
+        Text("Main menu order and visibility", style = MaterialTheme.typography.titleSmall)
         val ordered = tools.sortedBy { (style.dockOrder.indexOf(it.first).takeIf { n -> n >= 0 } ?: (100 + tools.indexOf(it))) }
         ordered.forEachIndexed { index, (id, label) -> Row(Modifier.fillMaxWidth()) {
             Checkbox(id !in style.hidden, { show -> change(style.copy(hidden = if (show) style.hidden - id else style.hidden + id)) }, enabled = id !in setOf("PFP", "CUSTOMIZE"))

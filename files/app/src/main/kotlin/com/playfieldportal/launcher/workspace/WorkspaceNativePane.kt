@@ -39,13 +39,16 @@ import kotlinx.coroutines.withContext
 }
 
 @Composable internal fun WorkspaceNativePane(key: String, initialPackage: String, initialUser: Int = -1,
-    launch: String? = null, focused: Boolean = false, onSelect: (NativeAppTarget) -> Unit = {}) {
+    launch: String? = null, focused: Boolean = false, showToolbar: Boolean = true,
+    profileRequest: Int = 0, reloadRequest: Int = 0, appScale: Float = 1f, phoneIme: Boolean = true,
+    onProfileRequestConsumed: () -> Unit = {}, onSelect: (NativeAppTarget) -> Unit = {}) {
     val context = LocalContext.current
     remember { WorkspaceNative.initialize(context); true }
     val status by WorkspaceNative.status.collectAsState()
     val state by WorkspaceNative.state(key).collectAsState()
     var target by remember(initialPackage, initialUser) { mutableStateOf<NativeAppTarget?>(null) }
     var picker by remember { mutableStateOf(false) }; var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(profileRequest) { if (profileRequest > 0) { picker = true; onProfileRequestConsumed() } }
     LaunchedEffect(initialPackage, initialUser, launch) {
         target = withContext(Dispatchers.IO) { if (initialPackage.isBlank()) null else WorkspaceNative.targets(context, initialPackage)
             .firstOrNull { initialUser < 0 || it.user == initialUser }?.let { selected ->
@@ -63,7 +66,7 @@ import kotlinx.coroutines.withContext
             Text("Choose an installed app and Android profile for this window.")
             TextButton(onClick = { picker = true }) { Text("Pick installed app / profile") }
         } else {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            if (showToolbar) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 TextButton(onClick = { WorkspaceNative.key(key, KeyEvent.KEYCODE_BACK) }) { Text("Back") }
                 TextButton(onClick = { picker = true }) { Text("App / profile") }
                 TextButton(onClick = { WorkspaceNative.close(key); reload++ }) { Text("Reload app window") }
@@ -71,8 +74,8 @@ import kotlinx.coroutines.withContext
                     .startMainActivity(android.content.ComponentName.unflattenFromString(app.component), android.os.UserHandle.getUserHandleForUid(app.user * 100000), null, null) } }) { Text("Open normally") }
             }
             val selected = requireNotNull(target)
-            androidx.compose.runtime.key(selected.key, launch, reload, status) {
-                NativeSurface(key, selected, launch, Modifier.weight(1f).fillMaxWidth())
+            androidx.compose.runtime.key(selected.key, launch, reload, reloadRequest, status) {
+                NativeSurface(key, selected, launch, appScale, phoneIme, Modifier.weight(1f).fillMaxWidth())
             }
             if (!state.attached) Text(state.status, style = MaterialTheme.typography.labelSmall, maxLines = 3)
         }
@@ -91,19 +94,23 @@ import kotlinx.coroutines.withContext
     }
 }
 
-@Composable private fun NativeSurface(window: String, target: NativeAppTarget, launch: String?, modifier: Modifier) {
+@Composable private fun NativeSurface(window: String, target: NativeAppTarget, launch: String?, appScale: Float, phoneIme: Boolean, modifier: Modifier) {
     val context = LocalContext.current; val owner = LocalLifecycleOwner.current
     var view by remember { mutableStateOf<TextureView?>(null) }
     var surface by remember { mutableStateOf<Surface?>(null) }
     fun attach(width: Int, height: Int) {
         val current = surface ?: return
-        if (current.isValid && width > 0 && height > 0)
-            WorkspaceNative.attach(window, target, current, width, height,
-                (context.resources.displayMetrics.densityDpi * 0.85f).toInt().coerceIn(120, 480), launch)
+        if (current.isValid && width > 0 && height > 0) {
+            val size = runCatching { NativeRenderSize.fit(width, height, context.resources.displayMetrics.densityDpi, appScale) }.getOrNull() ?: return
+            view?.surfaceTexture?.setDefaultBufferSize(size.width, size.height)
+            WorkspaceNative.attach(window, target, current, size.width, size.height, size.density, launch, phoneIme)
+        }
     }
+    val latestAttach by rememberUpdatedState<(Int, Int) -> Unit>({ width, height -> attach(width, height) })
+    LaunchedEffect(appScale, phoneIme) { view?.let { attach(it.width, it.height) } }
     DisposableEffect(owner, window) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) view?.let { attach(it.width, it.height) }
+            if (event == Lifecycle.Event.ON_RESUME) view?.let { latestAttach(it.width, it.height) }
             if (event == Lifecycle.Event.ON_STOP) WorkspaceNative.detach(window)
         }
         owner.lifecycle.addObserver(observer)
@@ -114,15 +121,20 @@ import kotlinx.coroutines.withContext
         isOpaque = true
         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-                surface?.release(); surface = Surface(texture); attach(width, height)
+                surface?.release(); surface = Surface(texture); latestAttach(width, height)
             }
-            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) { attach(width, height) }
+            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) { latestAttach(width, height) }
             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
                 WorkspaceNative.detach(window); surface?.release(); surface = null; return true
             }
             override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
         }
-        setOnTouchListener { _, event -> requestFocus(); WorkspaceNative.touch(window, event, width, height); true }
+        setOnTouchListener { _, event ->
+            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) { parent?.requestDisallowInterceptTouchEvent(true); requestFocus() }
+            WorkspaceNative.touch(window, event, width, height)
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP || event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) parent?.requestDisallowInterceptTouchEvent(false)
+            true
+        }
         setOnKeyListener { _, code, event ->
             if (event.action == KeyEvent.ACTION_UP && code in setOf(KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_TAB)) { WorkspaceNative.key(window, code); true } else false
         }

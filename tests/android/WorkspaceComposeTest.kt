@@ -34,11 +34,12 @@ class WorkspaceComposeTest {
         catalog = UnifiedCatalog(context)
     }
     @After fun cleanup() { catalog.close() }
-    @Test fun theDockUsesOneLibraryForSearchAndApps() {
+    @Test fun theMenuKeepsDirectViewsOnTheSharedLibrary() {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
         compose.onNodeWithTag("workspace-tool-LIBRARY").assertExists()
         compose.onNodeWithTag("workspace-tool-SEARCH").assertDoesNotExist()
-        compose.onNodeWithTag("workspace-tool-APPS").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-tool-APPS").assertExists()
+        compose.onNodeWithTag("workspace-tool-GAMES").assertExists()
     }
     @Test fun appsUseAnIconGridAndRetainTheirSharedLibraryActions() {
         catalog.syncSource("android", listOf(CatalogEntry("android:com.discord", "APP", "Discord test app", "Installed app", "com.discord", "android")))
@@ -76,6 +77,7 @@ class WorkspaceComposeTest {
     @Test fun searchStateSurvivesClosingAndReopeningTheWorkspace() {
         val expanded = androidx.compose.runtime.mutableStateOf(true)
         compose.setContent { XmbWorkspaceOverlay(expanded.value, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithTag("workspace-tool-LIBRARY").performClick()
         compose.onNodeWithText("Search games, apps, files and tools").performTextInput("kept query")
         compose.runOnIdle { expanded.value = false }
         compose.waitForIdle()
@@ -93,7 +95,8 @@ class WorkspaceComposeTest {
     }
     @Test fun everyWorkspaceToolCanBeReachedOnAPhone() {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
-        compose.onNodeWithTag("workspace-tool-SYSTEM").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("workspace-main-actions").performScrollToNode(hasTestTag("workspace-tool-SYSTEM"))
+        compose.onNodeWithTag("workspace-tool-SYSTEM").assertIsDisplayed().performClick()
         compose.waitForIdle()
         val directory = System.getProperty("arcdeck.screenshot.dir")
         if (directory != null) {
@@ -137,6 +140,7 @@ class WorkspaceComposeTest {
     }
     @Test fun savedLayoutsCanReuseWindowIdsForDifferentToolsWithoutLosingSearchState() {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithTag("workspace-tool-LIBRARY").performClick()
         compose.onNodeWithText("Search games, apps, files and tools").performTextInput("Kept across layouts")
         val prefs = context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
         fun switch(tool: String, epoch: Long) = prefs.edit().putString("panels", "[{\"id\":1,\"tool\":\"$tool\",\"x\":0,\"y\":54,\"w\":360,\"h\":700,\"max\":true}]")

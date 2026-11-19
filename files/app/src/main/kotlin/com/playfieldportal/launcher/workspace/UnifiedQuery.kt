@@ -15,6 +15,7 @@ data class UnifiedQuery(
     val invalid: List<String> = emptyList(),
     val favorite: Boolean? = null,
     val pinned: Boolean? = null,
+    val platform: String? = null,
 ) {
     enum class SortOrder { RELEVANCE, NAME, RECENT, MANUAL }
 
@@ -49,6 +50,7 @@ data class UnifiedQuery(
             var missing: Boolean? = null
             var favorite: Boolean? = null
             var pinned: Boolean? = null
+            var platform: String? = null
             var order = SortOrder.RELEVANCE
             for (token in tokens(raw)) {
                 val colon = token.indexOf(':')
@@ -60,6 +62,7 @@ data class UnifiedQuery(
                     "type", "kind" -> value.uppercase(Locale.ROOT).let {
                         if (it in validKinds) kinds.add(it) else invalid.add(token)
                     }
+                    "platform" -> if (value.matches(Regex("[A-Za-z0-9_-]{1,40}"))) platform = value.lowercase(Locale.ROOT) else invalid.add(token)
                     "tag" -> tags.add(normalizeTag(value))
                     "source" -> sources.add(value.lowercase(Locale.ROOT))
                     "in" -> collection = value
@@ -80,7 +83,7 @@ data class UnifiedQuery(
                     else -> words.add(token)
                 }
             }
-            return UnifiedQuery(words, kinds, tags, sources, collection, missing, order, invalid, favorite, pinned)
+            return UnifiedQuery(words, kinds, tags, sources, collection, missing, order, invalid, favorite, pinned, platform)
         }
 
         fun normalizeTag(raw: String): String = Normalizer.normalize(raw.trim(), Normalizer.Form.NFKC)
@@ -103,10 +106,11 @@ data class UnifiedQuery(
         }
         if (showMissing != null && other.showMissing != null && showMissing != other.showMissing)
             errors.add("Conflicting availability filters")
+        if (platform != null && other.platform != null && platform != other.platform) errors.add("Conflicting platform filters")
         return copy(words = words + other.words, kinds = overlap(kinds, other.kinds),
             tags = tags + other.tags, sources = overlap(sources, other.sources),
             collection = other.collection, showMissing = showMissing ?: other.showMissing,
-            favorite = favorite ?: other.favorite, pinned = pinned ?: other.pinned,
+            favorite = favorite ?: other.favorite, pinned = pinned ?: other.pinned, platform = platform ?: other.platform,
             sort = if (sort == SortOrder.RELEVANCE) other.sort else sort, invalid = errors)
     }
 }

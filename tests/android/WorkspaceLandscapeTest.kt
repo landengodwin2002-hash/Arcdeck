@@ -33,6 +33,7 @@ class WorkspaceLandscapeTest {
     @After fun close() { catalog.close() }
     @Test fun landscapeLibraryLeavesRoomForTheAppGridAndWindowSliders() {
         compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithTag("workspace-tool-LIBRARY").performClick()
         compose.onNodeWithText("Views").assertIsDisplayed().performClick()
         compose.onNodeWithText("Apps", useUnmergedTree = true).performClick()
         compose.onNodeWithContentDescription("Arrange window").performClick()

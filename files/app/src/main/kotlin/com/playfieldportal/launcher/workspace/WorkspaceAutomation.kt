@@ -28,7 +28,7 @@ internal object WorkspaceControls {
     val requests = state.asStateFlow()
     @Synchronized fun post(action: String, target: String) { validate(action, target); require(state.value.size < 64) { "Window queue is full" }; state.value = state.value + WorkspaceControl(++serial, action, target) }
     @Synchronized fun acknowledge(ids: Set<Long>) { state.value = state.value.filterNot { it.serial in ids } }
-    val tools = setOf("LIBRARY", "SEARCH", "APPS", "FILES", "SPACES", "TERMINAL", "NOTES", "SYSTEM", "PFP", "CUSTOMIZE", "CHATGPT", "DISCORD", "MEDIA", "CLIPBOARD", "GAMING", "AUTOMATION", "NATIVE", "AUTOLIB")
+    val tools = setOf("LIBRARY", "SEARCH", "APPS", "GAMES", "PRESETS", "FILES", "SPACES", "TERMINAL", "NOTES", "SYSTEM", "PFP", "CUSTOMIZE", "CHATGPT", "DISCORD", "MEDIA", "CLIPBOARD", "GAMING", "AUTOMATION", "NATIVE", "AUTOLIB")
     fun validate(action: String, target: String) {
         require(action in setOf("open", "minimize", "close", "tile", "stop")) { "Unknown window action" }
         require(if (action == "tile") target in setOf("side", "grid", "cascade") else if (action == "stop") target == "all" else target in tools) { "Unknown window target" }

@@ -22,7 +22,7 @@ class ArcDeckNativeService(context: Context) : Binder() {
     private val ownerUid = context.applicationInfo.uid
     private val ownerPackage = context.packageName
     private val lock = Any()
-    private data class Window(val pkg: String, val user: Int, val display: VirtualDisplay, var surface: Surface?)
+    private data class Window(val pkg: String, val user: Int, val display: VirtualDisplay, var surface: Surface?, var phoneIme: Boolean)
     private val windows = mutableMapOf<Int, Window>()
     private val gamePackages = mutableSetOf<String>()
     private val directoryPages = linkedMapOf<String, Pair<Long, List<java.io.File>>>()
@@ -63,11 +63,12 @@ class ArcDeckNativeService(context: Context) : Binder() {
         check(process.exitValue() == 0 && !result.contains("Error:", true) && !result.contains("Exception", true)) { result.take(1500).ifBlank { "Android rejected the native app request" } }
         return result
     }
-    private fun ime(id: Int) = runCatching {
+    private fun ime(id: Int, phone: Boolean) = runCatching {
         val sm = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "window") as IBinder
         val wm = Class.forName("android.view.IWindowManager\$Stub").getMethod("asInterface", IBinder::class.java).invoke(null, sm)
-        if (android.os.Build.VERSION.SDK_INT >= 31) wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(wm, id, 0)
-        else wm.javaClass.getMethod("setShouldShowIme", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).invoke(wm, id, true)
+        // FALLBACK_DISPLAY=1 places the user's keyboard on the physical phone; LOCAL=0 is optional.
+        if (android.os.Build.VERSION.SDK_INT >= 31) wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(wm, id, if (phone) 1 else 0)
+        else wm.javaClass.getMethod("setShouldShowIme", Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).invoke(wm, id, !phone)
     }
     private fun inject(event: InputEvent, id: Int) {
         require(id > 0 && windows.containsKey(id)) { "Input cannot fall back to the phone's main display" }
@@ -113,9 +114,10 @@ class ArcDeckNativeService(context: Context) : Binder() {
         val virtual = display ?: throw IllegalStateException("Native display is unsupported on this Android build", failure)
         val id = virtual.display.displayId
         if (id <= 0) { virtual.release(); error("Android returned its main display instead of a native window") }
-        windows[id] = Window(pkg, user, virtual, surface)
+        val phoneIme = request.optBoolean("phone_ime", true)
+        windows[id] = Window(pkg, user, virtual, surface, phoneIme)
         try {
-            ime(id)
+            ime(id, phoneIme)
             val launch = request.optString("intent").takeIf { it.isNotBlank() }
             val args = mutableListOf("/system/bin/am", "start", "--user", "$user", "--display", "$id", "-f", "0x18000000")
             if (launch == null) args.addAll(listOf("-n", component.flattenToString()))
@@ -139,6 +141,8 @@ class ArcDeckNativeService(context: Context) : Binder() {
                 val id = request.getInt("display"); val window = windows[id] ?: error("Native display is closed")
                 val w = request.getInt("width"); val h = request.getInt("height"); val density = request.getInt("density")
                 NativeProtocol.dimensions(w, h, density); require(surface?.isValid == true)
+                val phoneIme = request.optBoolean("phone_ime", true)
+                if (window.phoneIme != phoneIme) { ime(id, phoneIme); window.phoneIme = phoneIme }
                 window.display.resize(w, h, density); window.display.surface = surface
                 if (window.surface !== surface) window.surface?.release(); window.surface = surface
                 JSONObject().put("display", id).put("status", "connected")

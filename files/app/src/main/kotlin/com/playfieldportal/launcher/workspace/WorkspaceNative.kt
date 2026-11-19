@@ -27,7 +27,7 @@ internal object WorkspaceNative {
     val status = connectionState.asStateFlow()
     private val states = mutableMapOf<String, MutableStateFlow<NativeWindowState>>()
     private data class Slot(val target: NativeAppTarget, @Volatile var display: Int = -1, @Volatile var surface: Surface? = null,
-        var width: Int = 0, var height: Int = 0, var density: Int = 240, @Volatile var generation: Long = 0, var intent: String? = null)
+        var width: Int = 0, var height: Int = 0, var density: Int = 240, var phoneIme: Boolean = true, @Volatile var generation: Long = 0, var intent: String? = null)
     private val slots = mutableMapOf<String, Slot>()
     @Volatile private var binder: IBinder? = null
     private var args: Shizuku.UserServiceArgs? = null
@@ -79,7 +79,7 @@ internal object WorkspaceNative {
         if (ready() || binding) return
         app.getSharedPreferences("arcdeck_workspace", 0).edit().putBoolean("native_autoconnect", true).apply()
         args = Shizuku.UserServiceArgs(ComponentName(app.packageName, ArcDeckNativeService::class.java.name))
-            .tag("arcdeck-native-windows").daemon(false).processNameSuffix("native_windows").debuggable(false).version(14000)
+            .tag("arcdeck-native-windows").daemon(false).processNameSuffix("native_windows").debuggable(false).version(15000)
         connectionState.value = "Connecting native window service…"
         binding = true
         val attempt = ++bindingEpoch
@@ -115,12 +115,17 @@ internal object WorkspaceNative {
     fun defaultTarget(context: Context, pkg: String): NativeAppTarget? = targets(context, pkg).let { list ->
         list.firstOrNull { it.user == android.os.Process.myUserHandle().hashCode() } ?: list.firstOrNull()
     }
-    fun attach(key: String, target: NativeAppTarget, surface: Surface, width: Int, height: Int, density: Int, launch: String? = null) {
+    fun openNormally(context: Context, pkg: String, user: Int = -1) {
+        val target = targets(context, pkg).firstOrNull { user < 0 || it.user == user } ?: error("This app/profile is unavailable")
+        context.getSystemService(LauncherApps::class.java).startMainActivity(ComponentName.unflattenFromString(target.component), UserHandle.getUserHandleForUid(target.user * 100000), null, null)
+    }
+    fun attach(key: String, target: NativeAppTarget, surface: Surface, width: Int, height: Int, density: Int, launch: String? = null, phoneIme: Boolean = true) {
         if (!initialized) return
+        NativeProtocol.dimensions(width, height, density)
         val slot = synchronized(slots) {
             slots.getOrPut(key) { Slot(target) }.also {
-                it.surface = surface; it.width = width.coerceIn(128, 2560); it.height = height.coerceIn(128, 1560)
-                it.density = density.coerceIn(120, 480); it.intent = launch ?: it.intent; it.generation++
+                it.surface = surface; it.width = width; it.height = height; it.phoneIme = phoneIme
+                it.density = density; it.intent = launch ?: it.intent; it.generation++
             }
         }
         val epoch = slot.generation
@@ -128,16 +133,29 @@ internal object WorkspaceNative {
             if (!ready()) { update(key, NativeWindowState(status = status.value)); return@execute }
             if (slot.generation != epoch || slot.surface?.isValid != true) return@execute
             try {
+                if (slot.display < 0) {
+                    val dormant = synchronized(slots) {
+                        val live = slots.entries.filter { it.key != key && it.value.display > 0 }
+                        if (live.size >= NativeProtocol.MAX_WINDOWS) live.firstOrNull { it.value.surface == null }?.let { candidate ->
+                            slots.remove(candidate.key); candidate.value.generation++
+                            candidate.key to candidate.value
+                        } else null
+                    }
+                    dormant?.let { (oldKey, oldSlot) ->
+                        NativeProtocol.call(requireNotNull(binder), JSONObject().put("op", "close").put("display", oldSlot.display))
+                        update(oldKey, NativeWindowState(status = "Inactive window released; reopen its space to resume"))
+                    }
+                }
                 val request = JSONObject().put("op", if (slot.display < 0) "create" else "resize")
                     .put("package", target.pkg).put("component", target.component).put("user", target.user)
-                    .put("width", slot.width).put("height", slot.height).put("density", slot.density)
+                    .put("width", slot.width).put("height", slot.height).put("density", slot.density).put("phone_ime", slot.phoneIme)
                 if (slot.display >= 0) request.put("display", slot.display)
                 slot.intent?.let { request.put("intent", it) }
                 val result = NativeProtocol.call(requireNotNull(binder), request, surface)
                 slot.display = result.getInt("display")
-                if (slot.generation != epoch || slot.surface == null) {
+                if (slot.surface == null || synchronized(slots) { slots[key] !== slot }) {
                     NativeProtocol.call(requireNotNull(binder), JSONObject().put("op", "pause").put("display", slot.display))
-                } else { update(key, NativeWindowState(slot.display, "Installed app · Android profile ${target.user}", true)); WorkspaceNativeGameLauncher.complete(slot.intent) }
+                } else if (slot.generation == epoch) { update(key, NativeWindowState(slot.display, "Installed app · Android profile ${target.user}", true)); WorkspaceNativeGameLauncher.complete(slot.intent) }
             } catch (e: Exception) { val error = e.cause?.message ?: e.message ?: "Native app window failed"; WorkspaceNativeGameLauncher.complete(slot.intent, error); update(key, NativeWindowState(status = error)) }
         }
     }
