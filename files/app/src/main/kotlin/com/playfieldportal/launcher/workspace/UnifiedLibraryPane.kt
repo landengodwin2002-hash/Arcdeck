@@ -61,12 +61,13 @@ internal fun UnifiedLibraryPane(
     onSpaceCreated: () -> Unit = {},
     queryRequest: Int = 0,
     gameArt: List<com.playfieldportal.core.domain.model.Game> = emptyList(),
+    viewScope: String = "", onQueryChanged: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val compactHeight = LocalConfiguration.current.screenHeightDp < 500
     var viewMenu by remember { mutableStateOf(false) }
     var layoutOptions by remember { mutableStateOf(false) }
-    val browserKey = if (initialQuery == "type:game") "Games" else if (initialQuery == "type:app") "Apps" else "Library"
+    val browserKey = viewScope.ifBlank { if (initialQuery.startsWith("type:game")) "Games" else if (initialQuery.startsWith("type:app")) "Apps" else "Library" }
     var browse by remember(browserKey) { mutableStateOf(runCatching { WorkspaceBrowserPreferences.get(context, browserKey, browserKey == "Games") }.getOrDefault(WorkspaceBrowseStyle())) }
     val latestBrowse by rememberUpdatedState(browse)
     DisposableEffect(browserKey) { onDispose { WorkspaceBrowserPreferences.save(context, browserKey, latestBrowse) } }
@@ -76,6 +77,7 @@ internal fun UnifiedLibraryPane(
     val scope = rememberCoroutineScope()
     val revision by catalog.revision.collectAsState()
     var query by rememberSaveable { mutableStateOf(initialQuery) }
+    LaunchedEffect(query) { onQueryChanged(query) }
     var grid by rememberSaveable { mutableStateOf(browse.mode != "List") }
     LaunchedEffect(queryRequest) { if (queryRequest > 0) { query = initialQuery; grid = initialQuery == "type:app" } }
     var page by remember(query, revision, sourceRevision) { mutableIntStateOf(0) }

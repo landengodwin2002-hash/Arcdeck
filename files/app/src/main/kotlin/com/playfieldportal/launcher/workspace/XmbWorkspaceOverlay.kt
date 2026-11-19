@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -140,14 +141,15 @@ private data class Panel(
     val phoneIme: Boolean = true,
     val profileRequest: Int = 0,
     val reloadRequest: Int = 0,
-    val instance: String = java.util.UUID.randomUUID().toString()
+    val instance: String = java.util.UUID.randomUUID().toString(),
+    val query: String? = null, val location: String? = null
 ) {
     val appPackage get() = nativePackage.ifBlank { when (tool) {
         Tool.CHATGPT -> "com.openai.chatgpt"; Tool.DISCORD -> "com.discord"; Tool.MEDIA -> "com.google.android.youtube"; else -> ""
     } }
     val native get() = tool in setOf(Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA)
     val title get() = nativeTitle.ifBlank { tool.title }
-    val windowKey get() = "native:$instance"
+    fun windowKey(space: String) = "native:$space:$instance"
 }
 
 
@@ -180,9 +182,11 @@ private fun loadPanels(context: Context, raw: String? = null): List<Panel> {
                 fullscreen = item.optBoolean("full", false),
                 appScale = item.optDouble("appScale", 1.0).toFloat().takeIf { it.isFinite() }?.coerceIn(.75f, 1.25f) ?: 1f,
                 phoneIme = item.optBoolean("phoneIme", true),
-                instance = item.optString("instance").takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: java.util.UUID.randomUUID().toString()
+                instance = item.optString("instance").takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: java.util.UUID.randomUUID().toString(),
+                query = item.optString("query").takeIf { it.isNotEmpty() }?.take(512),
+                location = item.optString("location").takeIf { it.isNotBlank() && it.length <= 4096 && Uri.parse(it).scheme == "content" }
             )
-        }.distinctBy { if (it.native) "native:${it.appPackage}:${it.nativeUser}" else it.tool.name }
+        }.distinctBy { it.id }
     }.getOrDefault(emptyList())
 }
 
@@ -195,7 +199,7 @@ private fun savePanels(context: Context, panels: List<Panel>, space: String = Wo
             put("w", p.widthDp); put("h", p.heightDp)
             put("min", p.minimized); put("max", p.maximized); put("z", p.order)
             put("app", p.nativePackage); put("user", p.nativeUser); put("title", p.nativeTitle)
-            put("full", p.fullscreen); put("appScale", p.appScale); put("phoneIme", p.phoneIme); put("instance", p.instance)
+            put("full", p.fullscreen); put("appScale", p.appScale); put("phoneIme", p.phoneIme); put("instance", p.instance); put("query", p.query); put("location", p.location)
         })
     }
     context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE)
@@ -314,8 +318,8 @@ fun XmbWorkspaceOverlay(
                 observedRestore = pref.getLong("restore_epoch", 0)
                 val switching = key == "active_space" && WorkspaceSessions.active(context) != sessionId
                 if (switching) savePanels(context, panels.toList(), sessionId)
-                if (!switching) panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey) }
-                else panels.filter { it.native }.forEach { WorkspaceNative.detach(it.windowKey) }
+                if (!switching) panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey(sessionId)) }
+                else panels.filter { it.native }.forEach { WorkspaceNative.detach(it.windowKey(sessionId)) }
                 sessionId = WorkspaceSessions.active(context)
                 val restored = if (switching || key == "restore_epoch") WorkspaceSessions.read(context, sessionId) ?: "[]" else null
                 panels.clear(); panels.addAll(loadPanels(context, restored))
@@ -346,24 +350,26 @@ fun XmbWorkspaceOverlay(
     fun activate(requested: Tool) {
         menuVisible = false
         val tool = canonical(requested)
-        val old = panels.firstOrNull { it.tool == tool }
+        val old = panels.filter { it.tool == tool }.maxByOrNull { it.order }
+        val requestedFolder = if (tool == Tool.FILES) fileLocation.also { fileLocation = null } else null
         if (old != null) {
-            update(old.id) { it.copy(minimized = false, order = topOrder++) }
+            update(old.id) { it.copy(minimized = false, order = topOrder++, location = requestedFolder ?: it.location) }
         } else {
+            if (panels.size >= 32) { android.widget.Toast.makeText(context, "Close a window before opening more", android.widget.Toast.LENGTH_SHORT).show(); return }
             val stagger = (panels.size % 5) * 23f
             panels.add(Panel(nextId++, tool, 12f + stagger, 64f + stagger, widthDp = if (tool in setOf(Tool.GAMES, Tool.LIBRARY, Tool.PFP)) 640f else 390f, maximized = tool == Tool.PFP || (configuration.screenWidthDp < 600 && appearance.maximizePhone), order = topOrder++,
-                fullscreen = appearance.nativeFullscreen && tool in setOf(Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA)))
+                fullscreen = appearance.nativeFullscreen && tool in setOf(Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA), location = requestedFolder))
         }
         onSound(MenuSound.SELECT)
     }
     fun minimize(panel: Panel) {
         if (panel.tool == Tool.TERMINAL) TermuxBridge.pauseManaged(context)
-        if (panel.native) WorkspaceNative.detach(panel.windowKey)
+        if (panel.native) WorkspaceNative.detach(panel.windowKey(sessionId))
         update(panel.id) { it.copy(minimized = true) }
     }
     fun close(panel: Panel) {
         if (panel.tool == Tool.TERMINAL) TermuxBridge.stopManaged(context)
-        if (panel.native) WorkspaceNative.close(panel.windowKey)
+        if (panel.native) WorkspaceNative.close(panel.windowKey(sessionId))
         panels.removeAll { it.id == panel.id }
         paneState.removeState("$sessionId:${panel.tool.name}:${panel.id}")
     }
@@ -373,7 +379,7 @@ fun XmbWorkspaceOverlay(
         nativeRequests.forEach { request -> request.target?.let { target ->
             val old = panels.firstOrNull { it.native && it.appPackage == target.pkg && (it.nativeUser < 0 || it.nativeUser == target.user) }
             if (old != null) {
-                if (request.intent != null) WorkspaceNative.close(old.windowKey)
+                if (request.intent != null) WorkspaceNative.close(old.windowKey(sessionId))
                 update(old.id) { it.copy(minimized = false, nativePackage = target.pkg, nativeUser = target.user,
                     nativeTitle = target.title, nativeIntent = request.intent, order = topOrder++) }
             } else {
@@ -536,13 +542,16 @@ fun XmbWorkspaceOverlay(
                                         },
                                         onPreview = ::preview,
                                         onOpenPfpFeature = onOpenPfpFeature,
-                                        onSpaceCreated = { activate(Tool.SPACES) }, initialQuery = if (panel.tool == Tool.GAMES) "type:game" else queuedQuery, queryRequest = queryRequest, gameArt = games.orEmpty(),
+                                        onSpaceCreated = { activate(Tool.SPACES) }, initialQuery = if (panel.tool == Tool.GAMES) panel.query ?: "type:game" else queuedQuery.ifBlank { panel.query.orEmpty() }, queryRequest = queryRequest, gameArt = games.orEmpty(),
+                                        viewScope = if (panel.tool == Tool.GAMES) "Games" else "Library", onQueryChanged = { value -> update(panel.id) { it.copy(query = value) } },
                                     )
-                                    Tool.FILES -> WorkspaceFilesPane(catalog, fileLocation, onOpenPfpGame, fileRequest, ::preview)
+                                    Tool.FILES -> WorkspaceFilesPane(catalog, panel.location, onOpenPfpGame, fileRequest, ::preview,
+                                        onLocationChanged = { value -> update(panel.id) { it.copy(location = value) } })
                                     Tool.APPS -> UnifiedLibraryPane(catalog, catalogRevision, catalogError, false,
                                         onOpenPfpGame, onSetPfpFavorite, { queuedCommand = it; commandRequest++; activate(Tool.TERMINAL) },
                                         { id -> Tool.entries.firstOrNull { it.name.equals(id, true) }?.let { activate(it) } },
-                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, initialQuery = "type:app", gameArt = games.orEmpty(),
+                                        { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, initialQuery = panel.query ?: "type:app", gameArt = games.orEmpty(), viewScope = "Apps",
+                                        onQueryChanged = { value -> update(panel.id) { it.copy(query = value) } },
                                         onPreview = ::preview, onOpenPfpFeature = onOpenPfpFeature, onSpaceCreated = { activate(Tool.SPACES) })
                                     Tool.SPACES -> WorkspaceSpacePane(catalog, ::preview,
                                         { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, onOpenPfpGame,
@@ -564,7 +573,7 @@ fun XmbWorkspaceOverlay(
                                     Tool.GAMING -> WorkspaceGameConnectionsPane(catalog, { activate(Tool.SPACES) },
                                         { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, { onOpenPfpFeature("library") })
                                     Tool.NATIVE, Tool.CHATGPT, Tool.DISCORD, Tool.MEDIA -> if (launcherActive) WorkspaceNativePane(
-                                        panel.windowKey, panel.appPackage, panel.nativeUser, panel.nativeIntent, focused = active?.id == panel.id, showToolbar = false,
+                                        panel.windowKey(sessionId), panel.appPackage, panel.nativeUser, panel.nativeIntent, focused = active?.id == panel.id, showToolbar = false,
                                         profileRequest = panel.profileRequest, reloadRequest = panel.reloadRequest, appScale = panel.appScale, phoneIme = panel.phoneIme,
                                         onProfileRequestConsumed = { update(panel.id) { it.copy(profileRequest = 0) } },
                                         onSelect = { app -> update(panel.id) { it.copy(nativePackage = app.pkg, nativeUser = app.user, nativeTitle = app.title, nativeIntent = null) } })
@@ -572,7 +581,7 @@ fun XmbWorkspaceOverlay(
                                     Tool.AUTOLIB -> WorkspaceAutoLibraryPane(catalog,
                                         { uri -> fileLocation = uri; fileRequest++; activate(Tool.FILES) }, { onOpenPfpFeature("library") })
                                     Tool.SYSTEM -> SystemTool(onClose, onSystemUiChanged) {
-                                        panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey) }; panels.clear()
+                                        panels.filter { it.native }.forEach { WorkspaceNative.close(it.windowKey(sessionId)) }; panels.clear()
                                         panels.add(Panel(nextId++, Tool.LIBRARY, 12f, 64f, maximized = configuration.screenWidthDp < 600))
                                     }
                                 }
@@ -583,7 +592,7 @@ fun XmbWorkspaceOverlay(
                 }
                 fullscreenPanel?.let { current ->
                     fun park() {
-                        if (keyboardShown && current.native) WorkspaceNative.key(current.windowKey, android.view.KeyEvent.KEYCODE_BACK)
+                        if (keyboardShown && current.native) WorkspaceNative.key(current.windowKey(sessionId), android.view.KeyEvent.KEYCODE_BACK)
                         minimize(current)
                     }
                     WorkspaceFullscreenControls(onPfp = { park(); menuVisible = true }, onWorkspace = { park(); menuVisible = false },
@@ -613,15 +622,19 @@ fun XmbWorkspaceOverlay(
                     WorkspaceDialog({ adjusting = null }, { Text("Arrange ${selected.title}") }, {
                         Column(Modifier.heightIn(max = (viewportHeight - 150f).coerceAtLeast(120f).dp).verticalScroll(rememberScrollState())) {
                             Row(Modifier.horizontalScroll(rememberScrollState())) {
+                                if (selected.tool in setOf(Tool.FILES, Tool.LIBRARY, Tool.GAMES, Tool.APPS)) TextButton(enabled = panels.size < 32, onClick = {
+                                    panels.add(selected.copy(id = nextId++, instance = java.util.UUID.randomUUID().toString(), x = selected.x + 24f, y = selected.y + 18f,
+                                        maximized = false, fullscreen = false, minimized = false, order = topOrder++)); adjusting = null
+                                }) { Text("New ${selected.title} window") }
                                 TextButton(onClick = { minimize(selected); adjusting = null }) { Text("Minimize") }
                                 TextButton(onClick = { update(id) { it.copy(fullscreen = true, order = topOrder++) }; adjusting = null }) { Text("Full screen") }
                                 TextButton(onClick = { update(id) { it.copy(fullscreen = false, maximized = false) }; adjusting = null }) { Text("Windowed") }
                             }
                             if (selected.native) {
                                 Row(Modifier.horizontalScroll(rememberScrollState())) {
-                                    TextButton(onClick = { WorkspaceNative.key(selected.windowKey, android.view.KeyEvent.KEYCODE_BACK) }) { Text("App Back") }
+                                    TextButton(onClick = { WorkspaceNative.key(selected.windowKey(sessionId), android.view.KeyEvent.KEYCODE_BACK) }) { Text("App Back") }
                                     TextButton(onClick = { update(id) { it.copy(profileRequest = it.profileRequest + 1) }; adjusting = null }) { Text("App / profile") }
-                                    TextButton(onClick = { WorkspaceNative.close(selected.windowKey); update(id) { it.copy(reloadRequest = it.reloadRequest + 1) }; adjusting = null }) { Text("Reload app") }
+                                    TextButton(onClick = { WorkspaceNative.close(selected.windowKey(sessionId)); update(id) { it.copy(reloadRequest = it.reloadRequest + 1) }; adjusting = null }) { Text("Reload app") }
                                     TextButton(onClick = { runCatching { WorkspaceNative.openNormally(context, selected.appPackage, selected.nativeUser) }; adjusting = null }) { Text("Open normally") }
                                 }
                                 Text("App text size · ${(selected.appScale * 100).roundToInt()}%")

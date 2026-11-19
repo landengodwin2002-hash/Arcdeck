@@ -200,6 +200,8 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         val workspace = listOf(
             Triple("search", "Universal search", "arcdeck:search"),
             Triple("library", "Unified library", "arcdeck:library"),
+            Triple("games", "Game library", "arcdeck:games"),
+            Triple("presets", "Emulators and Papaya presets", "arcdeck:presets"),
             Triple("files", "Workspace file explorer", "arcdeck:files"),
             Triple("terminal", "Termux command panel", "arcdeck:terminal"),
             Triple("notes", "Workspace notes", "arcdeck:notes"),

@@ -106,7 +106,7 @@ internal fun workspaceArt(entry: CatalogEntry, game: Game?, choice: String): Wor
             verticalArrangement = Arrangement.spacedBy(5.dp)) {
             @Composable fun title() { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(entry.alias ?: entry.title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                TextButton(onClick = { onOptions(entry) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(36.dp)) { Text("⋮") }
+                TextButton(onClick = { onOptions(entry) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.size(48.dp)) { Text("⋮") }
             } }
             if (style.titleAbove) title()
             WorkspaceEntryArtwork(entry, game, style.artwork, artModifier)
@@ -114,7 +114,7 @@ internal fun workspaceArt(entry: CatalogEntry, game: Game?, choice: String): Wor
         }
     }
     if (style.mode == "Carousel") BoxWithConstraints(modifier) {
-        val artHeight = (maxHeight - 60.dp).coerceIn(48.dp, 280.dp)
+        val artHeight = (maxHeight - 74.dp).coerceIn(48.dp, 280.dp)
         LazyRow(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = when (style.alignment) {
             "Top" -> Alignment.Top; "Bottom" -> Alignment.Bottom; else -> Alignment.CenterVertically
         }) {

@@ -108,6 +108,22 @@ class WorkspaceRedesignTest {
             assertTrue(UnifiedQuery.parse("platform:bad/value").invalid.isNotEmpty())
         } finally { catalog.close() }
     }
+    @Test fun importedRecipesPassTheRealLauncherValidator() {
+        val raw = context.assets.open("emulator_kb/emulators.json").bufferedReader().use { it.readText() }
+        val decoded = com.playfieldportal.core.domain.model.emulatorkb.EmulatorKbDecoder.decode(raw)
+        assertTrue(decoded is com.playfieldportal.core.domain.model.emulatorkb.EmulatorKbDecode.Decoded)
+        val document = (decoded as com.playfieldportal.core.domain.model.emulatorkb.EmulatorKbDecode.Decoded).document
+        val checked = com.playfieldportal.core.domain.model.emulatorkb.EmulatorKbValidator.validate(document,
+            com.playfieldportal.feature.launcher.kb.KnownPlatformIds.ALL, context.packageName)
+        assertTrue(checked.refusedEmulators.toString(), checked.refusedEmulators.isEmpty())
+        assertEquals(6, checked.emulators.count { it.id.startsWith("papaya_") })
+    }
+    @Test fun paneLocationsAndQueriesAreValidatedBeforeRestore() {
+        WorkspaceBackup.validatePanels("""[{"id":1,"tool":"FILES","location":"content://example/tree/games"},{"id":2,"tool":"GAMES","query":"type:game platform:psp"}]""")
+        assertThrows(IllegalArgumentException::class.java) {
+            WorkspaceBackup.validatePanels("""[{"id":1,"tool":"FILES","location":"file:///private/data"}]""")
+        }
+    }
     @Test fun pinnedPapayaCatalogIncludesTheRealDefinitionsAndCompatibleAdditions() {
         val data = PapayaCatalog.load(context)
         assertEquals(52, data.platforms.size); assertEquals(433, data.emulators.size); assertEquals(14, data.streaming.size)

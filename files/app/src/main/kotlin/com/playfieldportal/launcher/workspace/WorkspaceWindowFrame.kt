@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
     onFullscreen: () -> Unit, onClose: () -> Unit, onMove: (Offset) -> Unit, onResize: (Offset) -> Unit,
     content: @Composable () -> Unit) {
     val colors = MaterialTheme.colorScheme
+    val move by rememberUpdatedState(onMove)
+    val resize by rememberUpdatedState(onResize)
     BoxWithConstraints(modifier.then(if (fullscreen) Modifier.background(colors.background.copy(alpha = 1f)) else Modifier
         .clip(RoundedCornerShape(corners.dp)).background(colors.surface).border(1.dp, colors.primary.copy(alpha = .4f), RoundedCornerShape(corners.dp)))) {
         val wide = maxWidth >= 480.dp
@@ -34,13 +36,13 @@ import androidx.compose.ui.unit.sp
             if (!fullscreen) Row(Modifier.fillMaxWidth().height(48.dp).testTag("workspace-window-title")
                 .background(colors.surface).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f).fillMaxHeight()
-                    .pointerInput(maximized) { if (!maximized) detectDragGestures { change, delta -> change.consume(); onMove(delta) } }, contentAlignment = Alignment.CenterStart) {
+                    .pointerInput(maximized) { if (!maximized) detectDragGestures { change, delta -> change.consume(); move(delta) } }, contentAlignment = Alignment.CenterStart) {
                     Text("$symbol  $title", color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 WindowButton("⋮", "Arrange window", onArrange)
                 if (!maximized) Box(Modifier.size(44.dp)
                     .semantics { contentDescription = "Resize window" }
-                    .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); onResize(delta) } }, contentAlignment = Alignment.Center) {
+                    .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); resize(delta) } }, contentAlignment = Alignment.Center) {
                     Text("↘", color = colors.primary, fontSize = 20.sp)
                 }
                 if (wide) WindowButton("—", "Minimize window", onMinimize)
@@ -53,9 +55,9 @@ import androidx.compose.ui.unit.sp
         // Edge drags supplement the large title-bar resize handle without covering app controls.
         if (!fullscreen && !maximized) {
             Box(Modifier.align(Alignment.CenterEnd).width(6.dp).fillMaxHeight().padding(top = 48.dp)
-                .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); onResize(Offset(delta.x, 0f)) } })
+                .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); resize(Offset(delta.x, 0f)) } })
             Box(Modifier.align(Alignment.BottomCenter).height(6.dp).fillMaxWidth()
-                .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); onResize(Offset(0f, delta.y)) } })
+                .pointerInput(Unit) { detectDragGestures { change, delta -> change.consume(); resize(Offset(0f, delta.y)) } })
         }
     }
 }

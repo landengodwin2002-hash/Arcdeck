@@ -190,7 +190,7 @@ internal fun openWorkspaceDocument(context: Context, document: WorkspaceDocument
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOpenGame: (Long) -> Unit, requestId: Int = 0, onPreview: (String) -> Unit = {}) {
+internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOpenGame: (Long) -> Unit, requestId: Int = 0, onPreview: (String) -> Unit = {}, onLocationChanged: (String?) -> Unit = {}) {
     val context = LocalContext.current
     val documents = remember { WorkspaceDocuments(context) }
     val scope = rememberCoroutineScope()
@@ -233,7 +233,7 @@ internal fun WorkspaceFilesPane(catalog: UnifiedCatalog, location: String?, onOp
         prefs.edit().putString("file_location", uri).apply()
     }
     LaunchedEffect(location, requestId) { if (location != null && current != location) navigate(location) }
-    LaunchedEffect(current) { chosen = emptySet(); selectMode = false }
+    LaunchedEffect(current) { chosen = emptySet(); selectMode = false; onLocationChanged(current) }
     LaunchedEffect(current, revision, limit) {
         val uri = current?.let(Uri::parse) ?: return@LaunchedEffect
         workspaceResult { withContext(Dispatchers.IO) { documents.stat(uri) to documents.children(uri, limit) } }

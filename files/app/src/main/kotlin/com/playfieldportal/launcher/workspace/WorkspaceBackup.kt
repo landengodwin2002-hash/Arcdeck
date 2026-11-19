@@ -105,6 +105,9 @@ internal object WorkspaceBackup {
             require(window.getInt("id") > 0 && ids.add(window.getInt("id"))) { "Invalid window identity" }
             require(window.getString("tool") in tools) { "Unknown workspace tool" }
             require(!window.has("instance") || window.getString("instance").matches(Regex("[A-Za-z0-9_-]{1,64}"))) { "Invalid window instance" }
+            require(window.optString("query").length <= 512) { "Saved query is too large" }
+            val location = window.optString("location")
+            require(location.isEmpty() || (location.length <= 4096 && android.net.Uri.parse(location).scheme == "content")) { "Invalid file-pane location" }
             val scale = window.optDouble("appScale", 1.0)
             require(scale.isFinite() && scale in 0.75..1.25) { "Invalid app text scale" }
             val app = window.optString("app"); if (app.isNotBlank()) NativeProtocol.packageName(app)
