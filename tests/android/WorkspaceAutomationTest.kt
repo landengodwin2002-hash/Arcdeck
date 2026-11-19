@@ -62,10 +62,18 @@ class WorkspaceAutomationTest {
         assertEquals("one", history.take("CHATGPT")!!.getString("url")); assertNull(history.take("CHATGPT"))
         assertEquals("two", history.take("DISCORD")!!.getString("url"))
     }
-    @Test fun legacyLibraryViewsShareOneDestinationAndLandscapeTilesFit() {
-        listOf("SEARCH", "APPS", "COLLECTIONS", "LIBRARY").forEach { assertEquals("LIBRARY", WorkspaceWindowGeometry.canonical(it)) }
-        val tiles = (0..2).map { WorkspaceWindowGeometry.tile(it, 3, 840f, 400f, "side") }
-        tiles.forEach { assertTrue(it.x >= 0 && it.y >= 62 && it.x + it.width <= 840 && it.y + it.height <= 348) }
-        assertTrue(tiles[0].x + tiles[0].width < tiles[1].x); assertTrue(tiles[1].x + tiles[1].width < tiles[2].x)
+    @Test fun directLibraryViewsStayDistinctAndLandscapeTilesRespectEveryControlBarPosition() {
+        listOf("SEARCH", "COLLECTIONS", "LIBRARY").forEach { assertEquals("LIBRARY", WorkspaceWindowGeometry.canonical(it)) }
+        assertEquals("APPS", WorkspaceWindowGeometry.canonical("APPS"))
+        assertEquals("GAMES", WorkspaceWindowGeometry.canonical("GAMES"))
+        for (position in listOf("Top", "Bottom", "Left", "Right")) {
+            val inset = WorkspaceDesktopGeometry.insets(position, true, 840f)
+            val tiles = (0..2).map { WorkspaceDesktopGeometry.tile(it, 3, 840f, 400f, "side", inset) }
+            tiles.forEach { assertTrue(it.x >= inset.left && it.y >= inset.top && it.x + it.width <= 840 - inset.right && it.y + it.height <= 400 - inset.bottom) }
+            for (i in tiles.indices) for (j in i + 1 until tiles.size) {
+                val a = tiles[i]; val b = tiles[j]
+                assertTrue(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y)
+            }
+        }
     }
 }

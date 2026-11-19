@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -30,7 +31,7 @@ import androidx.compose.ui.unit.sp
     val threshold = with(LocalDensity.current) { 36.dp.toPx() }
     val home by rememberUpdatedState(onPfp)
     BackHandler(menu) { menu = false }
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().zIndex(1_000_000f)) {
         if (menu) {
             Box(Modifier.fillMaxSize().clickable { menu = false })
             Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 30.dp, start = 10.dp, end = 10.dp)
