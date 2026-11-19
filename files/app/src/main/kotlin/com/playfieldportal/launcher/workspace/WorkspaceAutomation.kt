@@ -38,6 +38,7 @@ internal object WorkspaceControls {
 internal object WorkspaceAutomation {
     const val PORT = 47831
     fun prefs(context: Context) = context.getSharedPreferences("arcdeck_automation", Context.MODE_PRIVATE)
+    fun connected(context: Context) = WorkspaceAutomationService.running && prefs(context).getBoolean("enabled", false)
     fun token(context: Context): String {
         val prefs = prefs(context)
         return prefs.getString("token", null) ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
@@ -46,7 +47,7 @@ internal object WorkspaceAutomation {
     fun allowed(context: Context, pkg: String): Boolean = pkg == context.packageName || pkg in prefs(context).getStringSet("apps", emptySet()).orEmpty()
     fun curl(context: Context): String = "curl --fail --silent --show-error -H 'Authorization: Bearer ${token(context)}' -H 'Content-Type: application/json' -d '{\"op\":\"window\",\"action\":\"open\",\"tool\":\"CHATGPT\"}' http://127.0.0.1:$PORT/action"
     fun dispatch(context: Context, body: JSONObject): JSONObject {
-        check(prefs(context).getBoolean("enabled", false)) { "Start the script connection in ArcDeck first" }
+        check(connected(context)) { "Start the script connection in ArcDeck first" }
         val power = context.getSystemService(PowerManager::class.java)
         val keyguard = context.getSystemService(KeyguardManager::class.java)
         check(power.isInteractive && !keyguard.isKeyguardLocked) { "Unlock the phone before automating" }
@@ -122,6 +123,7 @@ class WorkspaceAutomationService : Service() {
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate()
+        WorkspaceAutomation.prefs(this).edit().putBoolean("enabled", false).putString("last_error", "").apply()
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("arcdeck_scripts", "ArcDeck script connection", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(this, 0, Intent(this, WorkspaceAutomationService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
@@ -132,6 +134,7 @@ class WorkspaceAutomationService : Service() {
         else { @Suppress("DEPRECATION") registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF)) }
         try {
             server = ServerSocket(WorkspaceAutomation.PORT, 4, InetAddress.getByName("127.0.0.1"))
+            running = true
             WorkspaceAutomation.prefs(this).edit().putBoolean("enabled", true).apply()
             Thread({
                 while (server?.isClosed == false) {
@@ -140,7 +143,7 @@ class WorkspaceAutomationService : Service() {
                         client.soTimeout = 3000
                         runCatching {
                             val request = AutomationHttp.read(client.getInputStream(), WorkspaceAutomation.token(this))
-                            if (request.path == "/status") AutomationHttp.reply(client, 200, JSONObject().put("status", "active").put("accessibility", WorkspaceAccessibilityService.active != null))
+                            if (request.path == "/status") AutomationHttp.reply(client, 200, JSONObject().put("status", if (WorkspaceAutomation.connected(this)) "active" else "stopping").put("accessibility", WorkspaceAccessibilityService.active != null))
                             else {
                                 val latch = CountDownLatch(1); val pending = AtomicBoolean(true); var result = JSONObject(); var code = 200
                                 main.post {
@@ -155,14 +158,16 @@ class WorkspaceAutomationService : Service() {
                     }
                 }
             }, "ArcDeck-local-script-connection").apply { isDaemon = true; start() }
-        } catch (_: Exception) { stopSelf() }
+        } catch (e: Exception) { WorkspaceAutomation.prefs(this).edit().putString("last_error", e.message ?: "Could not start script connection").apply(); stopSelf() }
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { if (intent?.action == "STOP") stopSelf(); return START_NOT_STICKY }
     override fun onDestroy() {
-        server?.close(); server = null
+        running = false; runCatching { server?.close() }; server = null
         WorkspaceAutomation.prefs(this).edit().putBoolean("enabled", false).apply()
+        if (getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("pause_scripts", true)) TermuxBridge.pauseManaged(this)
         runCatching { unregisterReceiver(screenOff) }; super.onDestroy()
     }
+    companion object { @Volatile internal var running = false }
 }
 
 class WorkspaceAccessibilityService : AccessibilityService() {

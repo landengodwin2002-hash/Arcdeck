@@ -17,12 +17,12 @@ import kotlinx.coroutines.withContext
 
 @Composable internal fun WorkspaceAutomationPane(catalog: UnifiedCatalog) {
     val context = LocalContext.current; val prefs = remember { WorkspaceAutomation.prefs(context) }
-    var enabled by remember { mutableStateOf(prefs.getBoolean("enabled", false)) }
+    var enabled by remember { mutableStateOf(WorkspaceAutomation.connected(context)) }
     var error by remember { mutableStateOf("") }; var filter by remember { mutableStateOf("") }
     var apps by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     var allowed by remember { mutableStateOf(prefs.getStringSet("apps", emptySet()).orEmpty().toSet()) }
     DisposableEffect(prefs) {
-        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> enabled = prefs.getBoolean("enabled", false) }
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key -> enabled = WorkspaceAutomation.connected(context); if (key == "last_error") error = prefs.getString("last_error", "") ?: "" }
         prefs.registerOnSharedPreferenceChangeListener(listener); onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
     LaunchedEffect(filter) { apps = withContext(Dispatchers.IO) { catalog.search("type:app", 500).filter { (it.title + " " + it.target).contains(filter, true) } } }
@@ -32,12 +32,12 @@ import kotlinx.coroutines.withContext
         Text("Termux → ArcDeck → apps", style = MaterialTheme.typography.titleMedium)
         Text("Start a local script connection when needed. It stops when the screen turns off. Nothing reads app messages or sends actions until your script requests them.")
         Button(onClick = {
-            if (enabled) context.stopService(Intent(context, WorkspaceAutomationService::class.java))
+            if (enabled) { prefs.edit().putBoolean("enabled", false).apply(); context.stopService(Intent(context, WorkspaceAutomationService::class.java)) }
             else if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             else start()
         }) { Text(if (enabled) "Stop script connection" else "Start script connection") }
         TextButton(onClick = { WorkspaceApps.copy(context, WorkspaceAutomation.curl(context)); error = "Connection example copied. Treat its token as private; paste it into your Termux script." }) { Text("Copy Termux connection example") }
-        TextButton(onClick = { context.stopService(Intent(context, WorkspaceAutomationService::class.java)); prefs.edit().remove("token").apply(); error = "Old connection token revoked. Copy a new example before restarting." }) { Text("Revoke connection token") }
+        TextButton(onClick = { prefs.edit().putBoolean("enabled", false).remove("token").apply(); context.stopService(Intent(context, WorkspaceAutomationService::class.java)); error = "Old connection token revoked. Copy a new example before restarting." }) { Text("Revoke connection token") }
         Text("Window actions work inside ArcDeck. UI tap/swipe/paste needs the optional Android accessibility service and an allowed target app in front. Paste replaces the focused non-password field; it does not press Send.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Optional Android accessibility control") }
         OutlinedTextField(filter, { filter = it.take(100) }, label = { Text("Find apps to allow") }, modifier = Modifier.fillMaxWidth(), singleLine = true)

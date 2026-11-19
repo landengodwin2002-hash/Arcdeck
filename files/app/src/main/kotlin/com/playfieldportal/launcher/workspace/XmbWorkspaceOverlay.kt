@@ -239,7 +239,7 @@ fun XmbWorkspaceOverlay(
             if (event == Lifecycle.Event.ON_STOP) {
                 launcherActive = false
                 WorkspaceWebPolicy.suspendAll()
-                if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("pause_scripts", true)) TermuxBridge.pauseManaged(context)
+                if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("pause_scripts", true) && !WorkspaceAutomation.connected(context)) TermuxBridge.pauseManaged(context)
             }
             if (event == Lifecycle.Event.ON_PAUSE) savePanels(context, panels.toList())
         }

@@ -11,6 +11,14 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class WorkspaceAutomationTest {
+    @Test fun savedEnabledStateCannotPretendADeadServiceIsConnected() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        WorkspaceAutomation.prefs(context).edit().putBoolean("enabled", true).commit()
+        WorkspaceAutomationService.running = false
+        assertFalse(WorkspaceAutomation.connected(context))
+        assertThrows(IllegalStateException::class.java) { WorkspaceAutomation.dispatch(context, org.json.JSONObject("{\"op\":\"clipboard\",\"text\":\"unused\"}")) }
+        WorkspaceAutomation.prefs(context).edit().clear().commit()
+    }
     private val token = "abc123"
     private fun request(body: String, extra: String = "", authorization: String = "Bearer $token"): java.io.InputStream =
         ("POST /action HTTP/1.1\r\nAuthorization: $authorization\r\nContent-Type: application/json\r\nContent-Length: ${body.toByteArray().size}\r\n$extra\r\n$body").byteInputStream()
