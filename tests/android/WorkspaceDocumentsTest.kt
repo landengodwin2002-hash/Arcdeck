@@ -43,6 +43,20 @@ class WorkspaceDocumentsTest {
         provider.failQuery = true
         assertThrows(IllegalStateException::class.java) { documents.children(root) }
     }
+    @Test fun cancellingARefreshRetainsPreviouslyIndexedFilesAndTheirOrganization() {
+        context.deleteDatabase("arcdeck_unified_v1.db")
+        val catalog = UnifiedCatalog(context)
+        try {
+            context.contentResolver.takePersistableUriPermission(root, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            provider.createDocument("root", "text/plain", "Keep me.txt")
+            assertTrue(catalog.scanRoot(root).complete)
+            val entry = catalog.search("type:file").single(); catalog.rename(entry.key, "Personal name")
+            val report = catalog.scanRoot(root, cancelled = { true })
+            assertFalse(report.complete); assertEquals(0, report.indexed)
+            val retained = catalog.get(entry.key)!!
+            assertFalse(retained.missing); assertEquals("Personal name", retained.alias)
+        } finally { catalog.close() }
+    }
     @Test fun copyUsesStreamsWithoutOverwritingTheSource() = runBlocking {
         val id = provider.createDocument("root", "text/plain", "sample.txt")
         provider.nodes.getValue(id).file.writeText("sample content")

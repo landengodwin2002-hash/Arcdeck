@@ -238,6 +238,7 @@ fun XmbWorkspaceOverlay(
             if (event == Lifecycle.Event.ON_START) launcherActive = true
             if (event == Lifecycle.Event.ON_STOP) {
                 launcherActive = false
+                WorkspaceIndexing.cancel()
                 WorkspaceWebPolicy.suspendAll()
                 if (context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE).getBoolean("pause_scripts", true) && !WorkspaceAutomation.connected(context)) TermuxBridge.pauseManaged(context)
             }
