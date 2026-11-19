@@ -21,6 +21,8 @@ class WorkspaceNativeTest {
             assertThrows(IllegalArgumentException::class.java) { NativeProtocol.packageName(pkg) }
         assertThrows(IllegalArgumentException::class.java) { NativeProtocol.user(-1) }
         assertThrows(IllegalArgumentException::class.java) { NativeProtocol.user(10000) }
+        assertThrows(IllegalArgumentException::class.java) { NativeProtocol.windowPackage("dev.arcdeck.workspace", "dev.arcdeck.workspace") }
+        assertEquals("com.discord", NativeProtocol.windowPackage("com.discord", "dev.arcdeck.workspace"))
     }
     @Test fun nativeRenderingHasARealPixelBudget() {
         NativeProtocol.dimensions(1600, 900, 240)

@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 @Keep
 class ArcDeckNativeService(context: Context) : Binder() {
     private val ownerUid = context.applicationInfo.uid
+    private val ownerPackage = context.packageName
     private val lock = Any()
     private data class Window(val pkg: String, val user: Int, val display: VirtualDisplay, var surface: Surface?)
     private val windows = mutableMapOf<Int, Window>()
@@ -98,7 +99,7 @@ class ArcDeckNativeService(context: Context) : Binder() {
     private fun create(request: JSONObject, surface: Surface?): JSONObject {
         require(surface?.isValid == true) { "The app window has no live surface" }
         require(windows.size < NativeProtocol.MAX_WINDOWS) { "Close a native window before opening more than four" }
-        val pkg = NativeProtocol.packageName(request.getString("package")); val component = NativeProtocol.component(request.getString("component"), pkg)
+        val pkg = NativeProtocol.windowPackage(request.getString("package"), ownerPackage); val component = NativeProtocol.component(request.getString("component"), pkg)
         val user = NativeProtocol.user(request.getInt("user")); val width = request.getInt("width"); val height = request.getInt("height"); val dpi = request.getInt("density")
         NativeProtocol.dimensions(width, height, dpi)
         val base = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY

@@ -33,6 +33,7 @@ internal object WorkspaceNative {
     private var args: Shizuku.UserServiceArgs? = null
     private var initialized = false
     private var binding = false
+    private var bindingEpoch = 0
     private val received = Shizuku.OnBinderReceivedListener { main.post { if (initialized && app.getSharedPreferences("arcdeck_workspace", 0).getBoolean("native_autoconnect", false) && authorized()) connect(app) else refresh() } }
     private val dead = Shizuku.OnBinderDeadListener { main.post { disconnected("Shizuku stopped. Start it again to resume native windows.") } }
     private val permission = Shizuku.OnRequestPermissionResultListener { request, granted ->
@@ -40,6 +41,7 @@ internal object WorkspaceNative {
     }
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            main.post {
             binder = service; binding = false
             runCatching { service?.linkToDeath({ main.post { disconnected("Native window service stopped; reconnect Shizuku") } }, 0) }
             connectionState.value = "Native app windows connected"
@@ -47,8 +49,9 @@ internal object WorkspaceNative {
             synchronized(slots) { slots.values.forEach { it.display = -1 } }
             states.forEach { (_, state) -> state.value = NativeWindowState(status = "Ready · reopen or reload the native window") }
             WorkspaceAutoLibrary.kickoff(app, true)
+            }
         }
-        override fun onServiceDisconnected(name: ComponentName?) { disconnected("Native window service disconnected") }
+        override fun onServiceDisconnected(name: ComponentName?) { main.post { disconnected("Native window service disconnected") } }
     }
     fun initialize(context: Context) {
         if (initialized) return
@@ -79,8 +82,15 @@ internal object WorkspaceNative {
             .tag("arcdeck-native-windows").daemon(false).processNameSuffix("native_windows").debuggable(false).version(14000)
         connectionState.value = "Connecting native window service…"
         binding = true
+        val attempt = ++bindingEpoch
         try { Shizuku.bindUserService(requireNotNull(args), connection) }
         catch (e: Exception) { binding = false; disconnected(e.message ?: "Cannot connect native windows") }
+        main.postDelayed({
+            if (binding && bindingEpoch == attempt && !ready()) {
+                args?.let { runCatching { Shizuku.unbindUserService(it, connection, false) } }
+                disconnected("Native connection timed out. Check Shizuku is started and up to date, then tap Connect again.")
+            }
+        }, 15000)
     }
     private fun disconnected(message: String) {
         binder = null; binding = false; connectionState.value = message
@@ -100,7 +110,7 @@ internal object WorkspaceNative {
         return launcher.profiles.flatMap { user -> runCatching {
             launcher.getActivityList(pkg, user).map { activity -> NativeAppTarget(activity.componentName.packageName,
                 activity.componentName.flattenToString(), user.hashCode(), activity.label.toString()) }
-        }.getOrDefault(emptyList()) }.distinctBy { it.key }.sortedBy { it.title.lowercase(java.util.Locale.ROOT) }
+        }.getOrDefault(emptyList()) }.filter { it.pkg != context.packageName }.distinctBy { it.key }.sortedBy { it.title.lowercase(java.util.Locale.ROOT) }
     }
     fun defaultTarget(context: Context, pkg: String): NativeAppTarget? = targets(context, pkg).let { list ->
         list.firstOrNull { it.user == android.os.Process.myUserHandle().hashCode() } ?: list.firstOrNull()
@@ -167,6 +177,7 @@ internal object WorkspaceNativeRequests {
     private val serial = java.util.concurrent.atomic.AtomicLong()
     val requests = changes.asStateFlow()
     @Synchronized fun open(context: Context, pkg: String, user: Int? = null, intent: String? = null, component: String? = null) {
+        if (pkg == context.packageName) { WorkspaceRequests.open(context); return }
         val target = WorkspaceNative.targets(context, pkg).firstOrNull { user == null || it.user == user }
             ?: error("This app is not available in an accessible Android profile")
         require(changes.value.size < 32) { "Wait for pending app windows to open" }

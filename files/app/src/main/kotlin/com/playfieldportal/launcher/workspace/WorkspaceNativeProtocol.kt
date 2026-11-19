@@ -17,6 +17,9 @@ internal object NativeProtocol {
     fun packageName(value: String): String = value.also {
         require(it.length <= 255 && it.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+"))) { "Invalid app package" }
     }
+    fun windowPackage(value: String, host: String): String = packageName(value).also {
+        require(it != host) { "ArcDeck stays on the phone display; it cannot host itself" }
+    }
     fun component(value: String, pkg: String): ComponentName = requireNotNull(ComponentName.unflattenFromString(value)).also {
         require(it.packageName == packageName(pkg) && it.className.matches(Regex("[A-Za-z0-9_.$]+"))) { "Invalid app activity" }
     }
