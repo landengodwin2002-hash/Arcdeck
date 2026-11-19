@@ -281,7 +281,13 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         return result
     }
 
-    /** Explicit user-requested SAF scan. Never guesses filesystem roots or crawls other app data. */
+    @Synchronized fun markSourceFilesMissing(source: String, uris: List<String>) {
+        uris.distinct().chunked(400).forEach { batch ->
+            writableDatabase.execSQL("UPDATE records SET missing=1 WHERE source=? AND target IN (${batch.joinToString(",") { "?" }})", (listOf(source) + batch).toTypedArray())
+        }
+        if (uris.isNotEmpty()) changed()
+    }
+    /** Refresh a granted tree or ArcDeck's own read-only phone provider. */
     @Synchronized
     fun scanRoot(rootUri: Uri, maxEntries: Int = 12000, maxDepth: Int = 16, cancelled: () -> Boolean = { false }): ScanReport {
         val source = "saf:${rootUri}"

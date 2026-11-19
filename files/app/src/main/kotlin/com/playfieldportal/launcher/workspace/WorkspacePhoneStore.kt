@@ -55,6 +55,15 @@ internal class WorkspacePhoneStore(context: Context) : SQLiteOpenHelper(context,
         }
         setState("completed", "${System.currentTimeMillis()}")
     }
+    fun stale(generation: Long): List<Pair<String, String>> {
+        val sources = JSONArray(getState("sources", "[]")); val out = mutableListOf<Pair<String, String>>()
+        for (i in 0 until sources.length()) {
+            val prefix = sources.getString(i).trimEnd('/') + "/document/"
+            readableDatabase.rawQuery("SELECT id,uri FROM files WHERE seen<>? AND substr(uri,1,?)=?", arrayOf("$generation", "${prefix.length}", prefix)).use { c -> while (c.moveToNext()) out.add(c.getString(0) to c.getString(1)) }
+        }
+        return out.distinct()
+    }
+    fun seen(id: String, generation: Long): Boolean = readableDatabase.rawQuery("SELECT 1 FROM files WHERE id=? AND seen=?", arrayOf(id, "$generation")).use { it.moveToFirst() }
     fun platforms(): List<String> = readableDatabase.rawQuery("SELECT DISTINCT platform FROM files WHERE kind='ROM' AND platform<>'' ORDER BY platform", null).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
     fun files(platform: String? = null, kind: String? = null, limit: Int = 20001): List<PhoneGameFile> {
         val clauses = mutableListOf<String>(); val args = mutableListOf<String>()

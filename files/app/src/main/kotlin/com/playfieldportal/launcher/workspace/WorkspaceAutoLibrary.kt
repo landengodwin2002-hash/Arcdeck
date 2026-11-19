@@ -170,6 +170,17 @@ internal object WorkspaceAutoLibrary {
             }
             val more = store.pending() > 0
             if (!more) {
+                val previous = deps.games().observeAll().first()
+                fun fileId(game: com.playfieldportal.core.domain.model.Game): String? = game.romUri?.let { uri ->
+                    runCatching { Uri.parse(uri).takeIf { WorkspaceStorage.owns(context, it) }?.let(DocumentsContract::getDocumentId) }.getOrNull()
+                } ?: game.romPath
+                if (failures == 0) {
+                    val removed = store.stale(generation); val removedIds = removed.map { it.first }.toSet()
+                    previous.filter { fileId(it) in removedIds }.mapNotNull { it.romPath }.distinct().chunked(400).forEach { deps.games().markMissing(it) }
+                    catalog.markSourceFilesMissing("phone:auto", removed.map { it.second })
+                }
+                previous.filter { fileId(it)?.let { id -> store.seen(id, generation) } == true }.mapNotNull { it.romPath }.distinct().chunked(400)
+                    .forEach { deps.games().markSeen(it, System.currentTimeMillis()) }
                 store.finish(failures == 0, generation)
                 val tree = WorkspacePhoneStore.tree(context)
                 deps.roots().add(tree.toString())
@@ -201,6 +212,7 @@ internal object WorkspaceAutoLibrary {
                 if (used > 1024) null else String(bytes, 0, used, Charsets.UTF_8)
             } }.getOrNull() ?: continue
             val parsed = WorkspaceGameConnections.parseId(file.name, text) ?: continue
+            if (parsed.second == null) continue // Unknown numeric text namespace stays available for manual review.
             byApp.getOrPut(hub.app) { mutableListOf() }.add(PcIdCandidate(file.uri, file.name.substringBeforeLast('.').take(160), parsed.first, parsed.second))
         }
         for ((pkg, candidates) in byApp) {

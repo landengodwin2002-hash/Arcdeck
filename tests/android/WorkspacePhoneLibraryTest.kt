@@ -40,7 +40,7 @@ class WorkspacePhoneLibraryTest {
             store.upsert(record("a", doc(a,"a/game")), 1); store.upsert(record("b", doc(b,"b/game")), 1)
             val partial = store.begin(listOf(doc(a,"a"))); store.finish(false, partial)
             assertNotNull(store.get("a")); assertNotNull(store.get("b"))
-            val complete = store.begin(listOf(doc(a,"a"))); store.finish(true, complete)
+            val complete = store.begin(listOf(doc(a,"a"))); assertEquals(listOf("a"), store.stale(complete).map { it.first }); store.finish(true, complete)
             assertNull(store.get("a")); assertNotNull(store.get("b"))
         }
     }
@@ -66,7 +66,7 @@ class WorkspacePhoneLibraryTest {
         provider.attachInfo(context, ProviderInfo().apply { authority = WorkspacePhoneStore.authority(context); exported = true; grantUriPermissions = true; readPermission = "android.permission.MANAGE_DOCUMENTS"; writePermission = readPermission })
         provider.onCreate(); ShadowContentResolver.registerProviderInternal(WorkspacePhoneStore.authority(context), provider)
         assertTrue(provider.isChildDocument("auto/gba", id)); assertFalse(provider.isChildDocument("auto/ps2", id))
-        provider.queryChildDocuments("auto/gba", null, null).use { assertEquals(1, it.count) }
+        provider.queryChildDocuments("auto/gba", projection = null, sortOrder = null).use { assertEquals(1, it.count) }
         val uri = WorkspacePhoneStore.doc(context, id)
         assertEquals("original ROM bytes", context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() })
         assertThrows(FileNotFoundException::class.java) { provider.openDocument(id, "w", null) }
