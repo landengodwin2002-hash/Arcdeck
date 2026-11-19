@@ -40,6 +40,8 @@ internal object WorkspaceBackup {
             .put("active_space", prefs.getString("active_space", ""))
             .put("system_bars", prefs.getBoolean("system_bars", false))
             .put("auto_index", prefs.getBoolean("auto_index", true))
+            .put("command_bar", prefs.getBoolean("command_bar", true)).put("pause_scripts", prefs.getBoolean("pause_scripts", true))
+            .put("landscape_first", prefs.getBoolean("landscape_first", true))
         return JSONObject().put("format", "arcdeck-workspace").put("version", 2)
             .put("catalog", JSONObject(catalog.exportUserLayer())).put("preferences", preferences).toString(2)
             .also { require(it.length <= MAX_CHARS) { "Backup exceeds 20 MB" } }
@@ -76,6 +78,9 @@ internal object WorkspaceBackup {
             .putString("game_connections", connections)
             .putBoolean("system_bars", prefs.optBoolean("system_bars", current.getBoolean("system_bars", false)))
             .putBoolean("auto_index", prefs.optBoolean("auto_index", current.getBoolean("auto_index", true)))
+            .putBoolean("command_bar", prefs.optBoolean("command_bar", current.getBoolean("command_bar", true)))
+            .putBoolean("pause_scripts", prefs.optBoolean("pause_scripts", current.getBoolean("pause_scripts", true)))
+            .putBoolean("landscape_first", prefs.optBoolean("landscape_first", current.getBoolean("landscape_first", true)))
             .putInt("workspace_key", shortcut)
             .putBoolean("landscape_prompt", prefs.optBoolean("landscape_prompt", false)).putLong("restore_epoch", System.nanoTime()).commit()) {
             "Organization restored; workspace preferences could not be saved"
@@ -87,7 +92,7 @@ internal object WorkspaceBackup {
         val windows = org.json.JSONArray(panels)
         require(windows.length() <= 32) { "Too many saved windows" }
         val ids = mutableSetOf<Int>()
-        val tools = setOf("SEARCH", "LIBRARY", "COLLECTIONS", "FILES", "APPS", "TERMINAL", "NOTES", "SYSTEM", "SPACES", "CUSTOMIZE", "PFP", "PREVIEW")
+        val tools = setOf("SEARCH", "LIBRARY", "COLLECTIONS", "FILES", "APPS", "TERMINAL", "NOTES", "SYSTEM", "SPACES", "CUSTOMIZE", "PFP", "PREVIEW", "CHATGPT", "DISCORD", "MEDIA", "CLIPBOARD", "GAMING", "AUTOMATION")
         for (i in 0 until windows.length()) {
             val window = windows.getJSONObject(i)
             require(window.getInt("id") > 0 && ids.add(window.getInt("id"))) { "Invalid window identity" }

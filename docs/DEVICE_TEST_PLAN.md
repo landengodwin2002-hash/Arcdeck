@@ -1,6 +1,6 @@
-# ArcDeck 1.2 phone checks
+# ArcDeck 1.3 phone checks
 
-1. Install the matching edition over 1.1 without uninstalling. Existing spaces, notes, games and folder permissions should remain.
+1. Install the matching edition over 1.2 without uninstalling. Existing spaces, notes, games and folder permissions should remain.
 2. In Spaces → Game connections, check that Papaya and the actual GameHub Lite variant are detected. A real spoof-name app such as AnTuTu must not be identified as GameHub.
 3. Connect Papaya's existing ROM folder as Games / ROMs. Browse/search its files. Open the Papaya space and app, then use Import ROMs / PFP exports to add the same root in PFP Library Manager with its real platforms/emulators.
 4. Use connected folder to attach that same directory to GameHub. Check that source bytes stay in place and tags/aliases apply across spaces. Connect separate saves/artwork folders too.
@@ -33,3 +33,9 @@ Update the signed 1.0 APK directly; keep its data and permissions. Test these ad
 9. After these checks, optionally choose ArcDeck as default Home. Android Settings → Apps → Default apps → Home app remains available independently of ArcDeck.
 
 The release has a different package identity from the earlier debug APK. Its private signing backup supports future updates to this release identity; it does not replace the official PlayFieldPortal signing key.
+
+1.3 physical-phone checks: open the new PFP command bar with your usual Android keyboard and its microphone; paste a short harmless Termux command, review it and check captured output. Test the clipboard pad with ChatGPT/Discord. Verify your own service logins in their web windows; external-app authentication, voice calls and YouTube background play may require their native apps/account features.
+
+Tile ChatGPT, Discord and Media side by side in landscape. Resize by the larger grip and sliders; scroll both dock and taskbar. Minimize/reopen each window, maximize another window, rotate the device, show/hide the keyboard and leave/return to ArcDeck. Expect unloaded pages to restore history, not unsaved form drafts. Check that media stops when its web window unloads. Native background audio remains controlled by that native app.
+
+Start a disposable managed `sleep 120` command, pause/resume it, leave ArcDeck, reopen it, then stop the run. Clear finished history while another run is active and verify its controls remain. Only enable Automation if you want to test scripts; use the copied curl example, two successive window opens followed by tiling, and clipboard text. If testing optional accessibility, allow a disposable app and check tap/swipe/focused-field text; reject a different frontmost package and password input. Screen-off, notification Stop and Revoke token must end the connection. CPU, memory, real-site playback and device-specific keyboard behavior require profiling on the actual phone and are not claimed from JVM tests.

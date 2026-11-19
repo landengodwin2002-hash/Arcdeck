@@ -26,7 +26,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class TerminalRun(val id: String, val command: String, val status: String,
-    val output: String = "", val exitCode: Int? = null)
+    val output: String = "", val exitCode: Int? = null, val managed: Boolean = false)
 
 internal object TermuxBridge {
     const val PERMISSION = "com.termux.permission.RUN_COMMAND"
@@ -37,7 +37,7 @@ internal object TermuxBridge {
         val rows = JSONArray(prefs(context).getString("history", "[]"))
         (0 until rows.length()).take(20).map { i -> rows.getJSONObject(i).let {
             TerminalRun(it.getString("id"), it.getString("command"), it.getString("status"),
-                it.optString("output"), if (it.isNull("exit")) null else it.getInt("exit"))
+                it.optString("output"), if (it.isNull("exit")) null else it.getInt("exit"), it.optBoolean("managed"))
         } }
     }.getOrDefault(emptyList())
 
@@ -45,30 +45,31 @@ internal object TermuxBridge {
         val rows = JSONArray()
         runs.take(20).forEach { rows.put(JSONObject().put("id", it.id).put("command", it.command)
             .put("status", it.status).put("output", it.output.takeLast(100000))
-            .put("exit", it.exitCode ?: JSONObject.NULL)) }
+            .put("exit", it.exitCode ?: JSONObject.NULL).put("managed", it.managed)) }
         prefs(context).edit().putString("history", rows.toString()).apply()
     }
 
     @Synchronized
-    fun clear(context: Context) = prefs(context).edit().remove("history").apply()
+    fun clear(context: Context) = save(context, history(context).filter { it.status in setOf("Running", "Paused", "Stopping") })
 
     @Synchronized
     fun acceptResult(context: Context, intent: Intent) {
         val id = intent.data?.lastPathSegment ?: return
         val rows = history(context)
-        if (rows.none { it.id == id && it.status == "Running" }) return
+        if (rows.none { it.id == id && it.status in setOf("Running", "Paused", "Stopping") }) return
         val result = intent.getBundleExtra("result") ?: return
         val error = result.getInt("err", -1)
         val output = listOf(result.getString("stdout", ""), result.getString("stderr", ""),
             result.getString("errmsg", "")).filter { it.isNotBlank() }.joinToString("\n").takeLast(100000)
         val exit = if (result.containsKey("exitCode")) result.getInt("exitCode") else null
-        save(context, rows.map { if (it.id == id) it.copy(status = if (error == -1 && exit == 0) "Completed" else "Failed",
+        save(context, rows.map { if (it.id == id) it.copy(status = if (it.status == "Stopping") "Stopped" else if (error == -1 && exit == 0) "Completed" else "Failed",
             output = output, exitCode = exit) else it })
     }
 
     @Synchronized
     fun run(context: Context, command: String, interactive: Boolean): String {
-        require(command.isNotBlank() && command.length <= 2048) { "Enter a command up to 2048 characters" }
+        require(command.isNotBlank() && command.length <= 32768) { "Enter a command up to 32,768 characters" }
+        require(history(context).count { it.status in setOf("Running", "Paused", "Stopping") } < 8) { "Stop an active script before starting more than eight" }
         check(context.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED) { "Grant the Termux command permission first" }
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo("com.termux", 0)
@@ -80,13 +81,13 @@ internal object TermuxBridge {
         val pending = PendingIntent.getBroadcast(context, 0, callback, flags)
         val intent = Intent("com.termux.RUN_COMMAND").setClassName("com.termux", "com.termux.app.RunCommandService")
             .putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
-            .putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", command))
+            .putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", if (interactive) command else WorkspaceScripts.wrap(id, command)))
             .putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
             .putExtra("com.termux.RUN_COMMAND_BACKGROUND", !interactive)
             .putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0")
             .putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
             .putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "ArcDeck command")
-        save(context, listOf(TerminalRun(id, command, "Running")) + history(context))
+        save(context, listOf(TerminalRun(id, command, "Running", managed = !interactive)) + history(context))
         try { checkNotNull(context.startService(intent)) { "Termux command service is unavailable" } }
         catch (e: Exception) {
             pending.cancel()
@@ -94,6 +95,26 @@ internal object TermuxBridge {
             throw e
         }
         return id
+    }
+
+    @Synchronized fun control(context: Context, id: String, action: String) {
+        val run = history(context).firstOrNull { it.id == id } ?: error("Run no longer exists")
+        require(run.managed && run.status in setOf("Running", "Paused", "Stopping")) { "Only active managed scripts can be controlled" }
+        check(context.checkSelfPermission(PERMISSION) == PackageManager.PERMISSION_GRANTED) { "Termux permission is missing" }
+        val command = WorkspaceScripts.control(id, action)
+        val intent = Intent("com.termux.RUN_COMMAND").setClassName("com.termux", "com.termux.app.RunCommandService")
+            .putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            .putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", command))
+            .putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            .putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "ArcDeck $action script")
+        checkNotNull(context.startService(intent)) { "Termux is unavailable" }
+        save(context, history(context).map { if (it.id == id) it.copy(status = when (action) { "pause" -> "Paused"; "resume" -> "Running"; else -> "Stopping" }) else it })
+    }
+    fun pauseManaged(context: Context) {
+        history(context).filter { it.managed && it.status == "Running" }.forEach { runCatching { control(context, it.id, "pause") } }
+    }
+    fun stopManaged(context: Context) {
+        history(context).filter { it.managed && it.status in setOf("Running", "Paused") }.forEach { runCatching { control(context, it.id, "stop") } }
     }
 }
 
@@ -129,7 +150,7 @@ internal fun WorkspaceTerminalPane(initialCommand: String?, requestId: Int = 0) 
             else "Permission was not granted. Enable it in ArcDeck app permissions."
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedTextField(command, { if (it.length <= 2048) command = it }, label = { Text("Bash command") },
+        OutlinedTextField(command, { if (it.length <= 32768) command = it }, label = { Text("Bash command") },
             modifier = Modifier.fillMaxWidth(), maxLines = 3, textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace))
         Row(Modifier.horizontalScroll(rememberScrollState())) {
             Button(enabled = command.isNotBlank(), onClick = { review = command }) { Text("Review & run") }
@@ -137,7 +158,8 @@ internal fun WorkspaceTerminalPane(initialCommand: String?, requestId: Int = 0) 
             TextButton(onClick = { runCatching {
                 context.startActivity(context.packageManager.getLaunchIntentForPackage("com.termux") ?: error("Install Termux first"))
             }.onFailure { status = it.message ?: "Termux unavailable" } }) { Text("Open Termux") }
-            TextButton(onClick = { TermuxBridge.clear(context); selected = null }) { Text("Clear history") }
+            TextButton(onClick = { TermuxBridge.clear(context); selected = null }) { Text("Clear finished history") }
+            WorkspaceVoiceButton { command = (command + " " + it).take(32768) }
         }
         Row {
             Checkbox(checked = interactive, onCheckedChange = { interactive = it })
@@ -150,6 +172,10 @@ internal fun WorkspaceTerminalPane(initialCommand: String?, requestId: Int = 0) 
             runs.forEach { run -> TextButton(onClick = { selected = run }) { Text("${run.status}: ${run.command.take(20)}") } }
         }
         val active = selected?.let { chosen -> runs.find { it.id == chosen.id } ?: chosen }
+        if (active?.managed == true && active.status in setOf("Running", "Paused", "Stopping")) Row {
+            TextButton(onClick = { runCatching { TermuxBridge.control(context, active.id, if (active.status == "Paused") "resume" else "pause") }.onFailure { status = it.message ?: "Script control failed" } }) { Text(if (active.status == "Paused") "Resume script" else "Pause script") }
+            TextButton(onClick = { runCatching { TermuxBridge.control(context, active.id, "stop") }.onFailure { status = it.message ?: "Could not stop script" } }) { Text("Stop script") }
+        }
         SelectionContainer(Modifier.weight(1f)) {
             LazyColumn(Modifier.fillMaxSize()) {
                 item { Text(active?.let { "$ ${it.command}\n${it.status}${it.exitCode?.let { code -> " · exit $code" } ?: ""}\n\n${it.output}" }

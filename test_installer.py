@@ -17,6 +17,8 @@ import com.playfieldportal.launcher.discord.DiscordBootstrap
         setContent {
     override fun onResume() {
         super.onResume()
+                requestedOrientation = requestedOrientationFor(mode)
+    private fun hideSystemBars() {
             hide(WindowInsetsCompat.Type.systemBars())
 '''
 MANIFEST='<manifest>\n    <application\n    >\n    </application>\n</manifest>\n'

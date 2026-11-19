@@ -3,6 +3,7 @@ package com.playfieldportal.launcher.workspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
@@ -18,11 +19,12 @@ internal object WorkspaceIndexing {
         try {
             if (!force && System.currentTimeMillis() - last < 300_000) return
             withContext(Dispatchers.IO) {
+                val scanContext = currentCoroutineContext()
                 val roots = catalog.roots()
                 for ((i, root) in roots.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     progress.value = "Updating folder ${i + 1}/${roots.size}: ${root.label}"
-                    catalog.scanRoot(android.net.Uri.parse(root.uri))
+                    catalog.scanRoot(android.net.Uri.parse(root.uri), cancelled = { !scanContext.isActive })
                 }
                 last = System.currentTimeMillis()
             }

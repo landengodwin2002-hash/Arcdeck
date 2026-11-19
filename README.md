@@ -1,6 +1,20 @@
-# ArcDeck Workspace 1.2
+# ArcDeck Workspace 1.3
 
 An Android home launcher and windowed workspace built on PlayFieldPortal 1.3.3. Games, installed apps, approved storage folders, files, command shortcuts and system tools share one searchable library and organization system.
+
+## Landscape multitasking and scripts
+
+1.3 adds a native command/search bar above PFP, with direct Library, ChatGPT, Discord, Media, game connections and Android controls. Library now owns search, installed apps and games together; the Apps filter uses an icon grid. Old Search/Apps/Collections window references converge on this one destination. Landscape mode is enabled by default and can be disabled under System. Android's keyboard, its voice typing and an optional speech-recognition button provide text input. Physical typing in the command bar is routed to the text field instead of PFP controller mappings.
+
+ChatGPT, Discord and Media are actual HTTPS WebView windows inside the launcher, using the services' web clients. They can be tiled side by side with the ▥ dock control or arranged using the window ⋮ menu and position/size sliders. The window frame, resize grip and taskbar targets are larger. Window animations default to 120 ms with a 0–400 ms slider. Short landscape windows collapse library filters/actions into Views to leave space for results. Existing PFP icon/layout/theme editors remain available from Customize and PFP features.
+
+Web windows are not embedded copies of native Android apps. Sign-in support is controlled by each site; Open app/browser is the fallback for unsupported embedded authentication. Native-app calls, microphone/camera features and native split-screen remain Android activities. Web panels grant no microphone/camera permission automatically and expose no JavaScript-to-Android script bridge. The page origin stays visible. File attachments use Android's file picker. The Clipboard pad provides deliberate Copy/Paste here and voice text, without a background clipboard watcher.
+
+Minimizing, closing or covering a web window with a maximized window unloads its renderer; leaving ArcDeck releases web renderers too. Reopening restores page history and the web profile's existing sign-in cookies, not arbitrary unsaved page drafts or running JavaScript. Save unfinished text in Notes/Clipboard before unloading. Media plays alongside other visible web windows; minimizing/unloading stops that window. YouTube native background playback depends on YouTube's account/features; ArcDeck does not bypass those requirements. Android and native apps control their own background processes—ArcDeck cannot force-stop arbitrary native apps. Folder refresh cancels on workspace hide/launcher stop, and scans retain old records when cancelled.
+
+The PFP command bar reviews a pasted command before starting it in Termux, then shows captured output in the launcher terminal. Background runs use a managed Bash process group with Pause, Resume and Stop controls. They pause when the terminal window is minimized or ArcDeck is left, and closing the terminal stops managed runs. Resume is explicit. Process identities include PID start times so stale records cannot signal an unrelated reused PID. Clear finished history preserves active controls. Interactive sessions remain in Termux. Scripts that deliberately create separate sessions or independent services remain outside the managed process group.
+
+Automation is optional and off by default. Start its local script connection in Automation, then copy the curl example into Termux. It binds only to 127.0.0.1:47831, requires a private per-install bearer token, rejects browser-origin requests, and stops on screen off or its notification's Stop action. The token and app permissions are device-local and excluded from backups. Window/clipboard commands need no accessibility service. Native tap/swipe/Back and focused-field text replacement require the optional Android accessibility service and an explicitly allowed app in front; password fields are rejected. No endpoint reads/export app messages or clicks Send automatically. See [script connection examples](docs/SCRIPT_CONNECTION.md).
 
 ## Papaya and GameHub Lite
 

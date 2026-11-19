@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="arcdeck_accessibility_description">Optional controls for your own Termux scripts: tap, swipe, Back and paste into a focused non-password field. Requires an active ArcDeck script connection and apps you explicitly allow. ArcDeck does not record or export app messages.</string>
+</resources>

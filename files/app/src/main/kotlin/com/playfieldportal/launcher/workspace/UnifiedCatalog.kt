@@ -283,7 +283,7 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
 
     /** Explicit user-requested SAF scan. Never guesses filesystem roots or crawls other app data. */
     @Synchronized
-    fun scanRoot(rootUri: Uri, maxEntries: Int = 12000, maxDepth: Int = 16): ScanReport {
+    fun scanRoot(rootUri: Uri, maxEntries: Int = 12000, maxDepth: Int = 16, cancelled: () -> Boolean = { false }): ScanReport {
         val source = "saf:${rootUri}"
         val grant = app.contentResolver.persistedUriPermissions.any {
             it.uri == rootUri && it.isReadPermission
@@ -300,12 +300,14 @@ internal class UnifiedCatalog(context: Context) : SQLiteOpenHelper(context.appli
         var failure = false
         val visited = mutableSetOf<String>()
         while (pending.isNotEmpty() && results.size < maxEntries) {
+            if (cancelled()) { complete = false; break }
             val (folder, depth) = pending.removeFirst()
             if (!visited.add(folder.toString())) continue
             val listing = try { documents.children(folder, (maxEntries - results.size + 1).coerceAtLeast(1)) }
                 catch (_: Exception) { failure = true; continue }
             if (listing.truncated) complete = false
             for (child in listing.items) {
+                if (cancelled()) { complete = false; break }
                 if (results.size >= maxEntries) { complete = false; break }
                 results.add(CatalogEntry("file:${child.uri}", if (child.directory) "FOLDER" else "FILE",
                     child.name, child.mime, child.uri.toString(), source, parentUri = folder.toString()))

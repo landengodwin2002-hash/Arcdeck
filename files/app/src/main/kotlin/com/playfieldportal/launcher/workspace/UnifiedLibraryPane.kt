@@ -13,6 +13,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,12 +59,17 @@ internal fun UnifiedLibraryPane(
     onPreview: (String) -> Unit = {},
     onOpenPfpFeature: (String) -> Unit = {},
     onSpaceCreated: () -> Unit = {},
+    queryRequest: Int = 0,
 ) {
     val context = LocalContext.current
+    val compactHeight = LocalConfiguration.current.screenHeightDp < 500
+    var viewMenu by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val revision by catalog.revision.collectAsState()
     var query by rememberSaveable { mutableStateOf(initialQuery) }
+    var grid by rememberSaveable { mutableStateOf(initialQuery == "type:app") }
+    LaunchedEffect(queryRequest) { if (queryRequest > 0) { query = initialQuery; grid = initialQuery == "type:app" } }
     var page by remember(query, revision, sourceRevision) { mutableIntStateOf(0) }
     var results by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     var collections by remember { mutableStateOf<List<CatalogCollection>>(emptyList()) }
@@ -153,14 +163,32 @@ internal fun UnifiedLibraryPane(
         } }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedTextField(query, { if (it.length <= 512) query = it }, label = { Text("Search games, apps, files and tools") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true, isError = queryError.isNotBlank(),
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(query, { if (it.length <= 512) query = it }, label = { Text(if (compactHeight) "Find in library" else "Search games, apps, files and tools") },
+            modifier = Modifier.weight(1f), singleLine = true, isError = queryError.isNotBlank(),
             trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("Clear") } })
+        if (compactHeight) Box {
+            TextButton(onClick = { viewMenu = true }) { Text("Views") }
+            DropdownMenu(viewMenu, { viewMenu = false }) {
+                listOf("All" to "", "Games" to "type:game", "Apps" to "type:app", "Files" to "source:files", "Recent" to "sort:recent").forEach { (label, filter) ->
+                    TextButton(onClick = { query = filter; grid = filter == "type:app"; showCollections = false; viewMenu = false }) { Text(label) }
+                }
+                TextButton(onClick = { grid = !grid; viewMenu = false }) { Text(if (grid) "List view" else "Grid view") }
+                TextButton(onClick = { showCollections = !showCollections; viewMenu = false }) { Text("Collections & storage") }
+                TextButton(onClick = { pickRoot.launch(null); viewMenu = false }) { Text("Add folder") }
+                TextButton(onClick = { newShortcut = true; viewMenu = false }) { Text("Add shortcut") }
+                TextButton(onClick = { collectionEditor = CatalogCollection(0, "", query.takeIf { it.isNotBlank() }); viewMenu = false }) { Text("Save collection") }
+                TextButton(onClick = { mutate("Apps refreshed") { catalog.syncAndroidApps(); catalog.syncSystemTools() }; viewMenu = false }) { Text("Refresh apps") }
+            }
+        }
+        }
+        if (!compactHeight) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             listOf("All" to "", "Games" to "type:game", "Apps" to "type:app", "Files" to "source:files",
                 "Favorites" to "is:favorite", "Pinned" to "is:pinned", "Recent" to "sort:recent", "Missing" to "is:missing")
                 .forEach { (label, filter) -> FilterChip(selected = query == filter && !showCollections,
-                    onClick = { query = filter; showCollections = false }, label = { Text(label) }) }
+                    onClick = { query = filter; showCollections = false; if (filter == "type:app") grid = true }, label = { Text(label) }) }
+            FilterChip(grid, { grid = !grid }, label = { Text(if (grid) "Grid" else "List") })
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { focus.clearFocus(); showCollections = !showCollections }) { Text(if (showCollections) "Search" else "Collections & storage") }
@@ -168,6 +196,7 @@ internal fun UnifiedLibraryPane(
             TextButton(enabled = !busy, onClick = { newShortcut = true }) { Text("Add shortcut") }
             TextButton(onClick = { collectionEditor = CatalogCollection(0, "", query.takeIf { it.isNotBlank() }) }) { Text("Save collection") }
             TextButton(enabled = !busy, onClick = { mutate("Apps refreshed") { catalog.syncAndroidApps(); catalog.syncSystemTools() } }) { Text("Refresh apps") }
+        }
         }
         if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (queryError.isNotBlank()) Text(queryError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -215,8 +244,18 @@ internal fun UnifiedLibraryPane(
                 }
             }
         } else {
-            Text("${results.size}${if (hasMore) "+" else ""} results", style = MaterialTheme.typography.labelSmall)
-            LazyColumn(Modifier.weight(1f)) {
+            if (!compactHeight) Text("${results.size}${if (hasMore) "+" else ""} results", style = MaterialTheme.typography.labelSmall)
+            if (grid) LazyVerticalGrid(columns = GridCells.Adaptive(96.dp), modifier = Modifier.weight(1f)) {
+                items(results, key = { it.key }) { entry ->
+                    Column(Modifier.padding(4.dp).fillMaxWidth().heightIn(min = 100.dp)
+                        .combinedClickable(onClick = { open(entry) }, onLongClick = { selected = entry }).padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        CatalogArtwork(entry)
+                        Text(entry.alias ?: entry.title, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (hasMore) item { TextButton(onClick = { page++ }) { Text("Load more") } }
+            } else LazyColumn(Modifier.weight(1f)) {
                 items(results, key = { it.key }) { entry ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Row(Modifier.weight(1f).clickable(enabled = !busy) { open(entry) }.padding(vertical = 7.dp),

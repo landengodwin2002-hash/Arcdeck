@@ -68,12 +68,13 @@ MAIN_EDITS = [('import com.playfieldportal.launcher.discord.DiscordBootstrap\n',
   '            // Route keyboard/controller focus to Compose while the workspace is open.\n'
   '            return super.dispatchKeyEvent(event)\n'
   '        }\n'
+  '        if (com.playfieldportal.launcher.workspace.WorkspaceInputFocus.editing || currentFocus?.onCheckIsTextEditor() == true) return super.dispatchKeyEvent(event)\n'
   '        // Let the gamepad handler process it first; fall back to normal dispatch\n'),
  ('        if (gamepadInputHandler.onMotionEvent(event)) return true\n',
   '        if (workspaceShowing) return super.onGenericMotionEvent(event)\n'
   '        if (gamepadInputHandler.onMotionEvent(event)) return true\n')]
 
-HOST_BLOCK = '''                            AppXmbHost()
+HOST_BLOCK = '''                            com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }
                             // ArcDeck managed host integration.
                             val arcDeckGames by remember(arcDeckGameRepository) { arcDeckGameRepository.observeAll() }.collectAsState(initial = null)
                             val arcDeckPfpState by xmbViewModel.uiState.collectAsState()
@@ -160,7 +161,8 @@ def plan_install(repo):
             first = text.index(marker)
             last = text.index(base_comment, first) + len(base_comment)
             text = text[:first] + MAIN_EDITS[4][1] + text[last:]
-        start = text.index('                            AppXmbHost()\n')
+        host_start = '                            com.playfieldportal.launcher.workspace.PfpWorkspaceHost { AppXmbHost() }\n'
+        start = text.index(host_start) if host_start in text else text.index('                            AppXmbHost()\n')
         match = re.search(r'^                            \)\n', text[start:], re.M)
         if not match: raise RuntimeError('ArcDeck host integration was not found')
         last = start + match.end()
@@ -185,8 +187,30 @@ def plan_install(repo):
     if rotate in text:
         text = anchored(text, [(rotate,
             'val rotatePrompt = !workspaceShowing && getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("landscape_prompt", false) && showRotatePrompt(orientationMode, LocalConfiguration.current.orientation)')], activity)
+    if '// ArcDeck landscape first' not in text:
+        text = anchored(text, [('                requestedOrientation = requestedOrientationFor(mode)',
+            '                // ArcDeck landscape first\n'
+            '                requestedOrientation = if (getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("landscape_first", true)) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else requestedOrientationFor(mode)')], activity)
+    if '// ArcDeck live orientation' not in text:
+        text = anchored(text, [('    private fun hideSystemBars() {\n',
+            '    private fun hideSystemBars() {\n        // ArcDeck live orientation\n'
+            '        requestedOrientation = if (getSharedPreferences("arcdeck_workspace", MODE_PRIVATE).getBoolean("landscape_first", true)) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else requestedOrientationFor(orientationMode)\n')], activity)
     result[activity] = text
     text = manifest.read_text(encoding="utf-8-sig")
+    text = text.replace('android:windowSoftInputMode="stateAlwaysHidden"', 'android:windowSoftInputMode="adjustResize"')
+    if 'workspace.WorkspaceAutomationService' not in text:
+        text = anchored(text, [('    </application>', '''        <service android:name="com.playfieldportal.launcher.workspace.WorkspaceAutomationService"
+            android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started authenticated local Termux script connection, stopped by the user or screen lock" />
+        </service>
+        <service android:name="com.playfieldportal.launcher.workspace.WorkspaceAccessibilityService"
+            android:exported="true" android:label="ArcDeck optional script controls"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/arcdeck_accessibility" />
+        </service>
+    </application>''')], manifest)
+
     if "com.termux.permission.RUN_COMMAND" not in text:
         text = anchored(text, [('    <application\n',
             '    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />\n\n    <application\n')], manifest)
@@ -247,12 +271,13 @@ def plan_install(repo):
     required = {'XmbWorkspaceOverlay.kt', 'UnifiedCatalog.kt', 'UnifiedQuery.kt', 'UnifiedLibraryPane.kt',
                 'WorkspaceFiles.kt', 'WorkspaceBackup.kt', 'WorkspaceTerminal.kt', 'WorkspaceNotes.kt', 'WorkspaceDialog.kt',
                 'WorkspaceSpaces.kt', 'WorkspaceSpacePane.kt', 'WorkspaceGameConnections.kt', 'WorkspaceGameConnectionsPane.kt', 'WorkspaceSharing.kt', 'WorkspaceOverlayService.kt',
-                'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt'}
+                'WorkspaceAppearance.kt', 'WorkspacePreview.kt', 'WorkspaceIndexing.kt', 'WorkspaceAndroid.kt',
+                'WorkspaceWeb.kt', 'WorkspaceAutomation.kt', 'WorkspaceCommandBar.kt', 'WorkspaceInput.kt', 'WorkspaceScripts.kt', 'WorkspaceWindowGeometry.kt'}
     if not required <= {p.name for p in sources.glob('*.kt')}:
         raise RuntimeError('Workspace source package is incomplete')
     orientation = repo / 'core/core-domain/src/main/kotlin/com/playfieldportal/core/domain/model/ScreenOrientationMode.kt'
     if orientation.is_file():
-        result[orientation] = orientation.read_text().replace('?: LANDSCAPE', '?: FOLLOW_DEVICE')
+        result[orientation] = orientation.read_text().replace('?: FOLLOW_DEVICE', '?: LANDSCAPE')
     for path in sorted(sources.glob('*.kt')):
         result[repo / 'app/src/main/kotlin/com/playfieldportal/launcher/workspace' / path.name] = path.read_text()
     for path in sorted((base/'tests/android').glob('*.kt')):

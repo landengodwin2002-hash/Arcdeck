@@ -36,6 +36,8 @@ import kotlinx.coroutines.withContext
 @Composable internal fun WorkspaceAndroidControls(onSystemUiChanged: () -> Unit) {
     val context = LocalContext.current; val prefs = remember { context.getSharedPreferences("arcdeck_workspace", Context.MODE_PRIVATE) }
     val enabled = workspaceFlag("overlay_enabled", false); val bars = workspaceFlag("system_bars", false); val indexing = workspaceFlag("auto_index", true)
+    val commandBar = workspaceFlag("command_bar", true); val pauseScripts = workspaceFlag("pause_scripts", true)
+    val landscape = workspaceFlag("landscape_first", true)
     var status by remember { mutableStateOf("") }
     fun startOverlay() {
         prefs.edit().putBoolean("overlay_enabled", true).apply()
@@ -60,6 +62,12 @@ import kotlinx.coroutines.withContext
     Text("A movable WS button opens your app spaces over Discord, Brave, ChatGPT and other apps. Use Android Share → Save to ArcDeck to bring content back into a space.", style = MaterialTheme.typography.bodySmall)
     Row { Switch(bars, { prefs.edit().putBoolean("system_bars", it).apply(); onSystemUiChanged() }); Text("Show Android status and navigation bars", Modifier.weight(1f).padding(10.dp)) }
     Row { Switch(indexing, { prefs.edit().putBoolean("auto_index", it).apply() }); Text("Refresh connected folders on return", Modifier.weight(1f).padding(10.dp)) }
+    Row { Switch(commandBar, { prefs.edit().putBoolean("command_bar", it).apply() }); Text("Command bar above the PFP menu", Modifier.weight(1f).padding(10.dp)) }
+    Row { Switch(pauseScripts, { prefs.edit().putBoolean("pause_scripts", it).apply() }); Text("Pause managed scripts when leaving ArcDeck", Modifier.weight(1f).padding(10.dp)) }
+    Row { Switch(landscape, { prefs.edit().putBoolean("landscape_first", it).apply(); onSystemUiChanged() }); Text("Open ArcDeck in landscape", Modifier.weight(1f).padding(10.dp)) }
+    Text("Hidden web windows unload automatically and restore their page history when reopened. Save unfinished text in Notes or Clipboard first. Native apps and their background playback remain controlled by Android and the app.", style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = { WorkspaceControls.post("stop", "all"); TermuxBridge.stopManaged(context); context.stopService(Intent(context, WorkspaceAutomationService::class.java)) }) { Text("Suspend windows and stop ArcDeck scripts") }
+    TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }) { Text("Android keyboard and voice typing") }
     listOf("Internet quick panel" to Settings.Panel.ACTION_INTERNET_CONNECTIVITY,
         "Volume quick panel" to Settings.Panel.ACTION_VOLUME, "Display and brightness" to Settings.ACTION_DISPLAY_SETTINGS,
         "Battery settings" to Settings.ACTION_BATTERY_SAVER_SETTINGS, "Notification settings" to Settings.ACTION_APP_NOTIFICATION_SETTINGS).forEach { (title, action) ->
@@ -93,6 +101,8 @@ import kotlinx.coroutines.withContext
         Text("Original PFP", style = MaterialTheme.typography.titleMedium)
         Text("The original launcher stays running beneath the workspace. These shortcuts return to its real screens; your workspace windows remain saved.")
         TextButton(onClick = { open("original") }) { Text("Return to original PFP") }
+        TextButton(onClick = { WorkspaceRequests.publish("GAMING") }) { Text("Papaya and GameHub connections") }
+        TextButton(onClick = { WorkspaceRequests.publish("SYSTEM") }) { Text("Android quality of life controls") }
         sections.forEach { (id, title) -> TextButton(onClick = { open("category:$id") }) { Text(title) } }
         listOf("Library manager" to "library", "PFP notifications and jobs" to "notifications", "Player status" to "player",
             "Original icon editor" to "icons", "Original XMB layout editor" to "layout", "Original color picker" to "colors").forEach { (title, id) ->

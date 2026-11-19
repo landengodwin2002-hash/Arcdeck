@@ -34,6 +34,19 @@ class WorkspaceComposeTest {
         catalog = UnifiedCatalog(context)
     }
     @After fun cleanup() { catalog.close() }
+    @Test fun theDockUsesOneLibraryForSearchAndApps() {
+        compose.setContent { XmbWorkspaceOverlay(true, {}, {}, {}, emptyList(), {}, { _, _ -> }, Modifier.fillMaxSize()) }
+        compose.onNodeWithTag("workspace-tool-LIBRARY").assertExists()
+        compose.onNodeWithTag("workspace-tool-SEARCH").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-tool-APPS").assertDoesNotExist()
+    }
+    @Test fun appsUseAnIconGridAndRetainTheirSharedLibraryActions() {
+        catalog.syncSource("android", listOf(CatalogEntry("android:com.discord", "APP", "Discord test app", "Installed app", "com.discord", "android")))
+        library(); compose.onNodeWithText("Apps").performClick(); waitFor("Discord test app")
+        compose.onNodeWithText("Grid").assertExists()
+        compose.onNodeWithText("Discord test app").performTouchInput { longClick() }
+        waitFor("Display alias"); compose.onNodeWithText("Display alias").assertExists()
+    }
     @Test fun gameConnectionsCanBeOpenedAndClosedAtPhoneWidth() {
         compose.setContent { MaterialTheme { WorkspaceSpacePane(catalog, {}, {}, {}, {}) } }
         compose.onNodeWithText("Game connections").performClick()
