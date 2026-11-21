@@ -20,6 +20,10 @@ jobs:
           java-version: '17'
       - name: Install Android build tools
         run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export PATH="$ANDROID_HOME/cmdline-tools/16.0/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          command -v sdkmanager
           yes | sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1" || true
           test -d "$ANDROID_HOME/ndk/27.2.12479018"
       - uses: gradle/actions/setup-gradle@v4
