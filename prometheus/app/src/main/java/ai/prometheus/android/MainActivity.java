@@ -44,7 +44,16 @@ public final class MainActivity extends Activity {
     private LinearLayout page,thread,toolbar;
     private ScrollView scroller;
     private EditText composer;
-    private TextView status,bookCount;
+    private TextView status,bookCount,avatar;
+    private int chatFontSize=18;
+    private boolean avatarBlink=false;
+    private final Runnable avatarAnimation=new Runnable(){
+        @Override public void run(){
+            avatarBlink=!avatarBlink;
+            if(avatar!=null)avatar.setText(busy? (avatarBlink?"◕_◕":"◕o◕") : (avatarBlink?"◡‿◡":"◕‿◕"));
+            main.postDelayed(this,1350);
+        }
+    };
     private EditText profileEdit;
     private int outputTokens=384;
     private int currentProject=-1;
@@ -93,6 +102,9 @@ public final class MainActivity extends Activity {
         try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='profile'",null)){
             if(settings.moveToFirst())profile=settings.getString(0);
         }
+        try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='font_size'",null)){
+            if(settings.moveToFirst())chatFontSize=Math.max(16,Math.min(24,Integer.parseInt(settings.getString(0))));
+        }
         try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='tokens'",null)){
             if(settings.moveToFirst())outputTokens=Integer.parseInt(settings.getString(0));
         }
@@ -105,10 +117,11 @@ public final class MainActivity extends Activity {
         File models=new File(getFilesDir(),"models");models.mkdirs();
         File current=new File(models,"prometheus.gguf");if(current.isFile())modelFile=current;
         render();
+        main.postDelayed(avatarAnimation,900);
         if(modelFile!=null)loadModel(modelFile);
     }
     @Override public void onDestroy(){
-        cancelRequested=true;nativeStop();
+        cancelRequested=true;nativeStop();main.removeCallbacks(avatarAnimation);
         jobs.execute(()->{nativeUnload();db.close();});
         jobs.shutdown();super.onDestroy();
     }
@@ -116,11 +129,13 @@ public final class MainActivity extends Activity {
     private void render(){
         LinearLayout root=column();root.setBackgroundColor(BG);setContentView(root);
         LinearLayout header=row();pad(header,18,12,14,10);root.addView(header,lp(-1,66));
-        TextView emblem=text("◕‿◕",19,PINK,true);emblem.setGravity(Gravity.CENTER);
+        avatar=text("◕‿◕",19,PINK,true);avatar.setGravity(Gravity.CENTER);
+        TextView emblem=avatar;
         emblem.setContentDescription("Prometheus companion");
         emblem.setBackground(bg(SURFACE,16,BORDER));header.addView(emblem,lp(78,48));
         LinearLayout title=column();header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        title.addView(text("Prometheus",21,FORE,true));
+        TextView titleText=text("PROMETHEUS",19,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
+        title.addView(titleText);
         status=text(ready?"● Model ready":busy?"● Working…":"● Choose a model",11,ready?MINT:MUTED,false);title.addView(status);
         header.addView(button("Model",this::modelDialog),lp(84,43));
         page=column();pad(page,16,4,16,0);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
@@ -152,7 +167,7 @@ public final class MainActivity extends Activity {
         LinearLayout sendbar=row();sendbar.setBackground(bg(SURFACE,19,BORDER));pad(sendbar,12,5,7,5);
         page.addView(sendbar,lp(-1,-2));
         composer=new EditText(this);composer.setTextColor(FORE);composer.setHintTextColor(MUTED);
-        composer.setTextSize(18);composer.setHint("Message Prometheus");composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setTextSize(chatFontSize);composer.setHint("Message Prometheus");composer.setBackgroundColor(Color.TRANSPARENT);
         composer.setMinLines(1);composer.setMaxLines(5);composer.setInputType(0x00020001|0x00020000);
         sendbar.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
         Button send=button("↑",this::send);send.setTextColor(MINT);sendbar.addView(send,lp(49,45));
@@ -162,7 +177,7 @@ public final class MainActivity extends Activity {
         LinearLayout wrapper=column();pad(wrapper,3,4,3,8);thread.addView(wrapper,lp(-1,-2));
         TextView who=text(role.equals("user")?"You":"Prometheus",12,role.equals("user")?MINT:MUTED,true);
         wrapper.addView(who,lp(-1,-2));
-        TextView body=text(msg,18,FORE,false);body.setTextIsSelectable(true);body.setLineSpacing(dp(3),1f);
+        TextView body=text(msg,chatFontSize,FORE,false);body.setTextIsSelectable(true);body.setLineSpacing(dp(3),1f);
         pad(body,14,11,14,11);body.setBackground(bg(role.equals("user")?USER:SURFACE,14,0));
         LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(5);wrapper.addView(body,p);
         return body;
@@ -548,6 +563,15 @@ public final class MainActivity extends Activity {
         pad(profileEdit,12,12,12,12);profileEdit.setText(profile);
         content.addView(profileEdit,lp(-1,-2));
         content.addView(button("Save profile",()->{profile=profileEdit.getText().toString().trim();saveSetting("profile",profile);notify("Profile saved locally");}),lp(-1,49));
+        content.addView(text("Chat text size",17,MINT,true));
+        SeekBar fontSlider=new SeekBar(this);fontSlider.setMax(8);fontSlider.setProgress(chatFontSize-16);
+        fontSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
+                if(fromUser){chatFontSize=16+progress;saveSetting("font_size",String.valueOf(chatFontSize));}
+            }
+            @Override public void onStartTrackingTouch(SeekBar s){}
+            @Override public void onStopTrackingTouch(SeekBar s){}
+        });content.addView(fontSlider);
         content.addView(text("Response length",17,MINT,true));
         RadioGroup lengths=new RadioGroup(this);lengths.setOrientation(RadioGroup.VERTICAL);
         for(int t:new int[]{192,384,640}){
