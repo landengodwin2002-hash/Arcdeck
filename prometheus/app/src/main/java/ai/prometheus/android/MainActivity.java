@@ -64,6 +64,7 @@ public final class MainActivity extends Activity {
     private String modelName="No model selected",activeTab="Chat";
     private String profile="Reply naturally and directly. Understand the intended meaning of abstract statements; ask for clarification only when required. Avoid dumping raw book passages. Cite sources if consulted. Accept corrections and adapt future responses.";
     private File modelFile;
+    private final java.util.concurrent.atomic.AtomicBoolean termuxSyncRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
     private int selectedBooks=0;
 
     private int dp(float d){return (int)(d*getResources().getDisplayMetrics().density+.5f);}
@@ -120,6 +121,14 @@ public final class MainActivity extends Activity {
         main.postDelayed(avatarAnimation,900);
         if(modelFile!=null)loadModel(modelFile);
     }
+    @Override protected void onResume(){
+        super.onResume();
+        // The terminal starts a short-lived loopback sender. Simply opening Prometheus
+        // imports the chosen model, books and knowledge without file pickers or pairing.
+        if(db!=null && termuxSyncRunning.compareAndSet(false,true)){
+            jobs.execute(()->{try{syncFromTermuxIfAvailable();}finally{termuxSyncRunning.set(false);}});
+        }
+    }
     @Override public void onDestroy(){
         cancelRequested=true;nativeStop();main.removeCallbacks(avatarAnimation);
         jobs.execute(()->{nativeUnload();db.close();});
@@ -137,7 +146,7 @@ public final class MainActivity extends Activity {
         TextView titleText=text("PROMETHEUS",19,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
         title.addView(titleText);
         status=text(ready?"● Model ready":busy?"● Working…":"● Choose a model",11,ready?MINT:MUTED,false);title.addView(status);
-        header.addView(button("Model",this::modelDialog),lp(84,43));
+        header.addView(button("Model",()->notify("Manage models in Termux: prometheus-sync --model-only")),lp(84,43));
         page=column();pad(page,16,4,16,0);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
         if(activeTab.equals("Chat"))showChat();
         else if(activeTab.equals("Library"))showLibrary();
@@ -198,7 +207,7 @@ public final class MainActivity extends Activity {
     private void send(){
         if(composer==null || busy)return;
         String q=composer.getText().toString().trim();if(q.isEmpty())return;
-        if(!ready){modelDialog();return;}
+        if(!ready){notify("No model yet. Run prometheus-sync in Termux, then reopen Prometheus.");return;}
         composer.setText("");
         ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);
         if(q.startsWith("/remember ") || q.startsWith("/correct ")){
@@ -282,19 +291,12 @@ public final class MainActivity extends Activity {
         page.addView(text("Your research library",22,FORE,true));
         TextView desc=text("Import books once, then ask questions across multiple sources in Chat. Files stay on your phone.",14,MUTED,false);
         pad(desc,0,9,0,16);page.addView(desc);
-        page.addView(button("＋ Import books (PDF, EPUB, DOCX, TXT)",this::selectBooks),lp(-1,52));
-        page.addView(button("⊞ Import entire book folder",()->{
-            Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-            startActivityForResult(i,PICK_BOOK_FOLDER);
-        }),lp(-1,52));
+        TextView terminalHelp=text("Book and memory setup is controlled entirely from Termux. Run prometheus-sync, then return to this app. For books only: prometheus-sync --books-only. Original files are preserved.",16,MINT,false);
+        pad(terminalHelp,8,16,8,20);terminalHelp.setBackground(bg(SURFACE,14,BORDER));page.addView(terminalHelp);
         bookCount=text("",14,MINT,false);pad(bookCount,5,17,0,15);page.addView(bookCount);
         updateBookCount();
         TextView help=text("Imported originals are archived privately on this phone. The app uses relevant passages to answer practical questions, not to replace conversation. Scanned PDFs still require OCR.",14,MUTED,false);
         page.addView(help);
-        page.addView(button("Clear book index",()->new AlertDialog.Builder(this).setTitle("Remove index?")
-            .setMessage("This deletes searchable passages only; your original book files remain untouched.")
-            .setNegativeButton("Cancel",null).setPositiveButton("Remove",(d,w)->{db.execSQL("DELETE FROM passages");updateBookCount();}).show()),lp(-1,48));
     }
     private void updateBookCount(){if(bookCount==null)return;
         try(Cursor c=db.rawQuery("SELECT COUNT(DISTINCT book) FROM passages",null)){
@@ -336,6 +338,7 @@ public final class MainActivity extends Activity {
         }
     }
     private String name(Uri uri){
+        if("file".equals(uri.getScheme()) && uri.getLastPathSegment()!=null) return uri.getLastPathSegment();
         try(Cursor c=getContentResolver().query(uri,null,null,null,null)){
             if(c!=null && c.moveToFirst()){int i=c.getColumnIndex(OpenableColumns.DISPLAY_NAME);if(i>=0)return c.getString(i);}
         }catch(Exception ignored){}
@@ -583,18 +586,16 @@ public final class MainActivity extends Activity {
         content.addView(lengths);
         content.addView(text("Active model",17,MINT,true));
         content.addView(text(modelName,15,FORE,false));
-        content.addView(button("Choose abliterated GGUF",this::modelDialog),lp(-1,49));
-        content.addView(text("Existing Termux books and memories",17,MINT,true));
-        content.addView(button("Import Termux migration",()->{
-            Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(Intent.CATEGORY_OPENABLE);
-            startActivityForResult(i,PICK_MIGRATION);
-        }),lp(-1,49));
+        TextView commands=text("All installation and maintenance happens in Termux:\nprometheus-sync                  (everything)\nprometheus-sync --model-only   (GGUF)\nprometheus-sync --books-only   (books)\nprometheus-sync --memory-only (chats, corrections, projects)\n\nOpen Prometheus again after starting the Termux command. No picker, server pairing, or setup screens.",15,MINT,false);
+        pad(commands,10,14,10,14);commands.setBackground(bg(SURFACE,14,BORDER));content.addView(commands);
         content.addView(text("Offline runtime: llama.cpp in this APK. No local HTTP server, pairing or Termux needed after importing your GGUF.",14,MUTED,false));
     }
 
     private void importMigration(Uri uri){
         setBusy(true,"● Restoring Termux knowledge…");
-        jobs.execute(()->{
+        jobs.execute(()->importMigrationWork(uri));
+    }
+    private boolean importMigrationWork(Uri uri){
             File tmp=null;int imported=0;
             try{
                 tmp=File.createTempFile("prometheus-migration-",".jsonl",getCacheDir());
@@ -608,7 +609,7 @@ public final class MainActivity extends Activity {
                 StringBuilder h=new StringBuilder();for(byte b:sha.digest())h.append(String.format(Locale.ROOT,"%02x",b&255));
                 String hash=h.toString();
                 try(Cursor c=db.rawQuery("SELECT 1 FROM imported_migrations WHERE sha256=?",new String[]{hash})){
-                    if(c.moveToFirst())throw new IOException("This migration file is already imported");
+                    if(c.moveToFirst())return true; // Safe repeated Termux sync
                 }
                 db.beginTransaction();
                 try(BufferedReader br=new BufferedReader(new InputStreamReader(new FileInputStream(tmp),StandardCharsets.UTF_8),32768)){
@@ -664,9 +665,14 @@ public final class MainActivity extends Activity {
                     }
                     setBusy(false,ready?"● Model ready":"● Choose a model");render();
                     notify("Restored "+count+" knowledge and chat records");});
-            }catch(Exception ex){String err=ex.getMessage();runUI(()->{setBusy(false,"● Migration failed");notify("Migration: "+err);});}
-            finally{if(tmp!=null)tmp.delete();}
-        });
+                return true;
+            }catch(Exception ex){String err=ex.getMessage();runUI(()->{setBusy(false,"● Migration failed");notify("Migration: "+err);});return false;}
+            finally{if(tmp!=null)tmp.delete();
+                if("file".equals(uri.getScheme()) && uri.getPath()!=null){
+                    File staged=new File(uri.getPath());
+                    if(getCacheDir().equals(staged.getParentFile()) && staged.getName().startsWith("prometheus-sync-")) staged.delete();
+                }
+            }
     }
 
     private void importBookFolder(Uri treeUri){
@@ -701,5 +707,139 @@ public final class MainActivity extends Activity {
             runUI(()->{setBusy(false,ready?"● Model ready":"● Choose model");updateBookCount();
                 notify("Archived and indexed "+ok+" books from "+examined+" files; "+failedCount+" need attention");});
         });
+    }
+
+    // ===== Termux automatic offline sync (one-time localhost data handoff) =====
+    // A Termux command starts a temporary local-only HTTP sender on port 18765.
+    // Opening the native APK initiates transfer and then the sender exits.
+    // All generation and storage remains native after this one-time setup.
+    private static final String TERMUX_BRIDGE="http://127.0.0.1:18765";
+    private static final long MAX_NATIVE_MODEL=12L*1024*1024*1024;
+
+    private HttpURLConnection syncConnection(String endpoint,int connectTimeout,int readTimeout)throws IOException{
+        URL u=new URL(TERMUX_BRIDGE+endpoint);
+        if(!"127.0.0.1".equals(u.getHost()))throw new IOException("Non-loopback setup address rejected");
+        HttpURLConnection c=(HttpURLConnection)u.openConnection();
+        c.setConnectTimeout(connectTimeout);c.setReadTimeout(readTimeout);
+        c.setUseCaches(false);c.setInstanceFollowRedirects(false);
+        return c;
+    }
+    private String sha256(File f)throws Exception{
+        java.security.MessageDigest m=java.security.MessageDigest.getInstance("SHA-256");
+        try(InputStream in=new FileInputStream(f)){byte[] buf=new byte[131072];int n;
+            while((n=in.read(buf))!=-1)m.update(buf,0,n);
+        }
+        StringBuilder h=new StringBuilder();for(byte b:m.digest())h.append(String.format(Locale.ROOT,"%02x",b&255));
+        return h.toString();
+    }
+    private void syncFinish(String body){
+        HttpURLConnection c=null;
+        try{
+            c=syncConnection("/done",1000,2000);c.setRequestMethod("POST");c.setDoOutput(true);
+            c.setRequestProperty("Content-Type","application/json");
+            byte[] bytes=body.getBytes(StandardCharsets.UTF_8);
+            c.setFixedLengthStreamingMode(bytes.length);
+            try(OutputStream o=c.getOutputStream()){o.write(bytes);}
+            c.getResponseCode();
+        }catch(Exception e){android.util.Log.w("PrometheusSync","Cannot acknowledge sender",e);}
+        finally{if(c!=null)c.disconnect();}
+    }
+    private File syncTransfer(JSONObject item,File target)throws Exception{
+        String id=item.getString("id"),expected=item.getString("sha256");
+        long size=item.getLong("size");
+        if(!id.matches("[0-9]{1,5}") || !expected.matches("[a-f0-9]{64}"))throw new IOException("Invalid transfer metadata");
+        if(size<1 || size>MAX_NATIVE_MODEL)throw new IOException("Transfer size rejected");
+        File dir=target.getParentFile();if(!dir.exists()&&!dir.mkdirs())throw new IOException("Cannot create storage folder");
+        if(dir.getUsableSpace()<size+64L*1024*1024)throw new IOException("Insufficient free storage for "+item.optString("name","file"));
+        File partial=new File(target.getPath()+".partial");
+        HttpURLConnection c=null;long read=0;long last=0;
+        try{
+            c=syncConnection("/item/"+id,5000,120000);
+            if(c.getResponseCode()!=200)throw new IOException("Termux sender HTTP "+c.getResponseCode());
+            java.security.MessageDigest md=java.security.MessageDigest.getInstance("SHA-256");
+            try(InputStream in=c.getInputStream();FileOutputStream out=new FileOutputStream(partial)){
+                byte[] b=new byte[131072];int n;
+                while((n=in.read(b))!=-1){if(Thread.currentThread().isInterrupted())throw new IOException("Interrupted");
+                    read+=n;if(read>size)throw new IOException("File exceeds advertised length");
+                    md.update(b,0,n);out.write(b,0,n);
+                    if(System.currentTimeMillis()-last>1800){last=System.currentTimeMillis();
+                        String progress="● Termux → Prometheus: "+item.optString("name","data")+" "+(100*read/size)+"%";
+                        runUI(()->{if(status!=null)status.setText(progress);});
+                    }
+                }
+                out.getFD().sync();
+            }
+            if(read!=size)throw new IOException("Incomplete transfer of "+item.optString("name","file"));
+            StringBuilder h=new StringBuilder();for(byte v:md.digest())h.append(String.format(Locale.ROOT,"%02x",v&255));
+            if(!expected.equals(h.toString()))throw new IOException("Checksum mismatch: "+item.optString("name","file"));
+            if(target.exists()&&!target.delete())throw new IOException("Cannot replace staging file");
+            if(!partial.renameTo(target))throw new IOException("Cannot finalize staging file");
+            return target;
+        }finally{if(c!=null)c.disconnect();if(partial.exists())partial.delete();}
+    }
+    private void syncFromTermuxIfAvailable(){
+        HttpURLConnection c=null;
+        try{
+            c=syncConnection("/manifest",1100,2500);
+            if(c.getResponseCode()!=200)return;
+            String body;
+            try(InputStream in=c.getInputStream()){body=readAll(in,2_000_000);}
+            JSONObject manifest=new JSONObject(body);
+            if(!"prometheus-local-transfer-v1".equals(manifest.optString("protocol")))return;
+            org.json.JSONArray items=manifest.getJSONArray("items");
+            if(items.length()>3000)throw new IOException("Too many transfer files");
+            runUI(()->setBusy(true,"● Importing from Termux…"));
+            int books=0,memories=0,models=0,failures=0;
+            for(int i=0;i<items.length();i++){
+                JSONObject item=items.getJSONObject(i);
+                String kind=item.optString("kind"),filename=item.optString("name","");
+                String lower=filename.toLowerCase(Locale.ROOT);
+                if(filename.length()>200 || filename.contains("/") || filename.contains("\\") || filename.contains("..")){
+                    failures++;continue;
+                }
+                try{
+                    if("model".equals(kind)){
+                        if(!lower.endsWith(".gguf") || !(lower.contains("abliterat")||lower.contains("obliterat")))
+                            throw new IOException("Only abliterated GGUF models are supported by this setup");
+                        File target=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
+                        String expected=item.getString("sha256");
+                        if(target.isFile() && target.length()==item.getLong("size") && sha256(target).equals(expected)){
+                            models++;continue;
+                        }
+                        File staging=new File(new File(getFilesDir(),"models"),"sync-abliterated.gguf");
+                        syncTransfer(item,staging);verifyGGUF(staging);
+                        // Safely stop old model before replacing the active GGUF.
+                        nativeUnload();ready=false;
+                        if(target.exists()&&!target.delete())throw new IOException("Cannot replace previous GGUF");
+                        if(!staging.renameTo(target))throw new IOException("Cannot activate abliterated GGUF");
+                        getPreferences(MODE_PRIVATE).edit().putString("model_label",filename).apply();
+                        models++;
+                    }else if("migration".equals(kind)){
+                        if(!lower.endsWith(".jsonl") || item.getLong("size")>1024L*1024*1024)throw new IOException("Invalid memory file");
+                        File stage=new File(getCacheDir(),"prometheus-sync-migration.jsonl");
+                        syncTransfer(item,stage);
+                        if(importMigrationWork(Uri.fromFile(stage)))memories++;
+                        else failures++;
+                    }else if("book".equals(kind)){
+                        if(!lower.matches("(?s).*\\.(pdf|epub|docx|odt|txt|md|fb2|rtf)$") || item.getLong("size")>256L*1024*1024)
+                            throw new IOException("Unsupported book format or size");
+                        File stage=new File(getCacheDir(),"prometheus-sync-"+item.getString("id")+"-"+filename);
+                        syncTransfer(item,stage);
+                        try{indexBook(Uri.fromFile(stage));books++;}
+                        finally{stage.delete();}
+                    }
+                }catch(Exception e){failures++;android.util.Log.e("PrometheusSync","Item skipped: "+filename,e);}
+            }
+            final int restoredBooks=books,restoredModels=models,restoredMem=memories,errors=failures;
+            syncFinish("{\"success\":true,\"models\":"+models+",\"books\":"+books+",\"migrations\":"+memories+",\"errors\":"+failures+"}");
+            runUI(()->{updateBookCount();setBusy(false,ready?"● Model ready":"● Preparing model…");
+                Toast.makeText(this,"Termux sync: "+restoredModels+" model, "+restoredBooks+" books, "+restoredMem+" migration; "+errors+" errors",Toast.LENGTH_LONG).show();});
+            File model=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
+            if(model.isFile() && (models>0 || modelFile==null))loadModelOnWorker(model);
+        }catch(java.net.ConnectException ignored){/* No sender: ordinary offline chat, no delay. */}
+        catch(Exception e){android.util.Log.e("PrometheusSync","Local transfer failed",e);
+            final String error=e.getMessage();syncFinish("{\"success\":false,\"message\":"+JSONObject.quote(error==null?"Unknown":error)+"}");
+            runUI(()->{setBusy(false,ready?"● Model ready":"● Termux sync error");notify("Termux setup: "+error);});
+        }finally{if(c!=null)c.disconnect();}
     }
 }
