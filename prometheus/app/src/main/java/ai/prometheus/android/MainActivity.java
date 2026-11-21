@@ -340,7 +340,7 @@ public final class MainActivity extends Activity {
         header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
         TextView titleText=text("PROMETHEUS",17,FORE,true);
         titleText.setLetterSpacing(.07f);title.addView(titleText);
-        status=text(ready?"● Offline AI ready":busy?"● Working locally…":"○ Offline model required",12,ready?0xff59eab4:MUTED,false);
+        status=text(ready?"● Model loaded locally":busy?"● Working locally…":"○ Import offline GGUF",12,ready?0xff59eab4:MUTED,false);
         status.setSingleLine(true);status.setEllipsize(android.text.TextUtils.TruncateAt.END);title.addView(status);
         petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
         petView.setContentDescription("Open interactive companion · Feed or praise");
@@ -356,6 +356,19 @@ public final class MainActivity extends Activity {
         else if(activeTab.equals("Library"))showLibrary();
         else if(activeTab.equals("Projects"))showProjects();
         else showSettings();
+        LinearLayout bottom=row();pad(bottom,3,4,3,3);root.addView(bottom,lp(-1,55));
+        for(String[] nav:new String[][]{{"Chat","◉"},{"Library","▤"},{"Projects","▣"},{"Settings","⚙"}}){
+            boolean selected=activeTab.equals(nav[0]);
+            Button tab=button(nav[1]+"\n"+nav[0],()->{if(!activeTab.equals(nav[0])){activeTab=nav[0];render();}});
+            tab.setTextSize(11);tab.setAllCaps(false);
+            tab.setTextColor(selected?MINT:MUTED);
+            if(selected){
+                GradientDrawable active=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xff1b3659,0xff493060});
+                active.setCornerRadius(dp(15));active.setStroke(dp(1),0xff93a6f6);tab.setBackground(active);
+            }else{tab.setBackgroundColor(Color.TRANSPARENT);}
+            LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(48),1f);
+            bp.setMargins(dp(2),0,dp(2),0);bottom.addView(tab,bp);
+        }
     }
     private void showChat(){
         try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
@@ -376,6 +389,15 @@ public final class MainActivity extends Activity {
                 }
             }
         }catch(Exception ignored){}
+        LinearLayout companionBar=row();pad(companionBar,9,2,5,5);
+        companionBar.setBackground(bg(0xff1a2540,14,0xff47456d));
+        TextView petMoodText=text("✦ Promie  ·  "+(petMood>65?"Happy":petMood>35?"Calm":"Needs attention"),13,PINK,true);
+        companionBar.addView(petMoodText,new LinearLayout.LayoutParams(0,dp(35),1f));
+        Button feedBtn=button("Feed",()->{petAction("feed");render();});feedBtn.setTextSize(12);
+        companionBar.addView(feedBtn,lp(61,35));
+        Button praiseBtn=button("♡",()->{petAction("praise");render();});praiseBtn.setTextSize(17);praiseBtn.setContentDescription("Praise your companion");
+        companionBar.addView(praiseBtn,lp(43,35));
+        page.addView(companionBar,lp(-1,42));
         scroller=new ScrollView(this);scroller.setFillViewport(true);
         thread=column();pad(thread,0,5,0,9);scroller.addView(thread);
         page.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
@@ -1164,8 +1186,12 @@ public final class MainActivity extends Activity {
                     String code=nativeGenerateStreaming("Reply in one short sentence: Hello, I am Prometheus.",48);
                     synchronized(streamBytes){testAnswer=new String(streamBytes.toByteArray(),StandardCharsets.UTF_8);}
                     if(testAnswer.trim().isEmpty())testAnswer=code;
+                    if(testAnswer.startsWith("__PROMETHEUS_"))testAnswer="ERROR: Native engine finished without visible reply text.";
                     if(testAnswer.length()>250)testAnswer=testAnswer.substring(0,250);
-                    testOk=!testAnswer.trim().isEmpty() && !testAnswer.startsWith("ERROR:") && !testAnswer.startsWith("Inference failed:");
+                    testOk=!testAnswer.trim().isEmpty() && !testAnswer.startsWith("ERROR:")
+                        && !testAnswer.startsWith("Inference failed:")
+                        && !testAnswer.startsWith("__PROMETHEUS_")
+                        && !testAnswer.equals("OK");
                     recordInference("Native model test: "+(testOk?"answer generated":"failed")+"; "+testAnswer.length()+" characters");
                 }catch(Throwable ex){testAnswer="Probe failed: "+ex.toString();recordInference(testAnswer);}
                 syncSendDiagnostics();
