@@ -55,10 +55,13 @@ Use Java 17, Gradle 8.13, SDK/build tools 35, NDK 27.2.12479018, and CMake 3.22.
 ```sh
 cd prometheus
 python3 scripts/fetch_runtime.py
-gradle :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+gradle -PprometheusAbis=x86_64 :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
 PROMETHEUS_TEST_MODEL=/absolute/path/Huihui-Qwen3.5-4B-abliterated.Q4_K_M.gguf \
     bash scripts/android_acceptance.sh
 ```
+
+The phone build defaults to ARM64. The x86_64 test build uses the same package,
+UI, Java code, native adapter, and pinned upstream runtime.
 
 The Android acceptance test provisions the model through the existing Termux
 transfer protocol, disables external connectivity, sends through the actual

@@ -105,6 +105,23 @@ public class OfflineConversationTest {
         await("No streamed answer",()->runtime.generating&&!runtime.partial.trim().isEmpty(),600);
         String firstChunk=runtime.partial;
         assertFalse(firstChunk.contains("\uFFFD"));
+        // Incoming text must not steal focus from someone composing the next message.
+        Activity writing=foreground();
+        int[] at=new int[2];
+        instrumentation.runOnMainSync(()->{
+            EditText input=composer(writing.getWindow().getDecorView());input.getLocationOnScreen(at);
+            at[0]+=input.getWidth()/2;at[1]+=input.getHeight()/2;
+        });
+        long touch=SystemClock.uptimeMillis();
+        instrumentation.sendPointerSync(MotionEvent.obtain(touch,touch,MotionEvent.ACTION_DOWN,at[0],at[1],0));
+        instrumentation.sendPointerSync(MotionEvent.obtain(touch,touch+50,MotionEvent.ACTION_UP,at[0],at[1],0));
+        instrumentation.sendStringSync("draft survives");
+        SystemClock.sleep(600);
+        instrumentation.runOnMainSync(()->{
+            EditText input=composer(writing.getWindow().getDecorView());
+            assertTrue("Streaming stole keyboard focus",input.hasFocus());
+            assertEquals("draft survives",input.getText().toString());
+        });
         instrumentation.runOnMainSync(first::recreate);
         instrumentation.getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
         await("Background reply did not finish",()->!runtime.generating,900);
@@ -117,6 +134,8 @@ public class OfflineConversationTest {
         instrumentation.runOnMainSync(()->context.startActivity(open));
         await("The screen did not reopen",()->foreground()!=null,30);
         assertEquals(answer,lastAssistant(db));
+        Activity restored=foreground();
+        instrumentation.runOnMainSync(()->assertEquals("draft survives",composer(restored.getWindow().getDecorView()).getText().toString()));
         try(Cursor c=db.rawQuery("SELECT body FROM memory WHERE kind='test'",null)){assertTrue(c.moveToFirst());assertEquals("migration sentinel",c.getString(0));}
         try(Cursor c=db.rawQuery("SELECT path FROM book_files WHERE sha256='test-upgrade-sentinel'",null)){assertTrue(c.moveToFirst());assertEquals("preserve/original.txt",c.getString(0));}
 

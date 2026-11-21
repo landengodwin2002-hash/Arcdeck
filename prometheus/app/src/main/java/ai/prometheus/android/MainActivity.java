@@ -319,6 +319,8 @@ public final class MainActivity extends Activity {
             }).setPositiveButton("Close",null).show();
     }
     private void render(){
+        boolean editing=composer!=null&&composer.hasFocus();
+        int selection=composer==null?0:composer.getSelectionStart();
         if(composer!=null){draft=composer.getText().toString();saveSetting("chat_draft",draft);composer=null;}
         LinearLayout root=column();root.setBackgroundColor(BG);root.setFocusableInTouchMode(true);setContentView(root);installSafeArea(root);
         LinearLayout header=row();pad(header,10,5,10,5);root.addView(header,lp(-1,67));
@@ -358,6 +360,7 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(48),1f);
             bp.setMargins(dp(2),0,dp(2),0);bottom.addView(tab,bp);
         }
+        if(editing&&composer!=null){composer.requestFocus();composer.setSelection(Math.max(0,Math.min(selection,composer.length())));}
     }
     private void showChat(){
         try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
@@ -438,7 +441,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(5);wrapper.addView(body,p);
         return body;
     }
-    private void scrollBottom(){if(scroller!=null)scroller.post(()->scroller.fullScroll(View.FOCUS_DOWN));}
+    private void scrollBottom(){if(scroller!=null)scroller.post(()->{if(thread!=null)scroller.scrollTo(0,thread.getHeight());});}
     private void send(){
         if(composer==null)return;
         String q=composer.getText().toString().trim();if(q.isEmpty())return;
@@ -457,7 +460,7 @@ public final class MainActivity extends Activity {
             return;
         }
         composer.setText("");
-        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);
+        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);composer.clearFocus();
         if(q.startsWith("/remember ") || q.startsWith("/correct ")){
             String kind=q.startsWith("/correct ")?"correction":"fact";
             String note=q.substring(q.indexOf(' ')+1).trim();

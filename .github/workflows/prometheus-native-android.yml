@@ -31,9 +31,25 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
       - name: Fetch unmodified pinned llama.cpp
         run: python3 prometheus/scripts/fetch_runtime.py
-      - name: Build the same app for phone and emulator; verify stream framing
+      - name: Restore the pinned native build
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            prometheus/app/.cxx
+            prometheus/app/build/intermediates/cxx
+          key: ${{ runner.os }}-nova-native-v1-${{ hashFiles('prometheus/app/build.gradle', 'prometheus/app/src/main/cpp/**', 'prometheus/scripts/fetch_runtime.py') }}
+      - name: Build the emulator target; verify stream framing
         working-directory: prometheus
-        run: gradle --no-daemon --max-workers=3 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+        run: gradle --no-daemon --max-workers=3 -PprometheusAbis=x86_64 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Cache the successfully compiled native runtime
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            prometheus/app/.cxx
+            prometheus/app/build/intermediates/cxx
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Fetch the exact existing 4B abliterated GGUF for runtime tests
         run: |
           mkdir -p "$RUNNER_TEMP/prometheus-model"

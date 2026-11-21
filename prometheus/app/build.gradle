@@ -1,4 +1,5 @@
 plugins { id 'com.android.application' }
+def targetAbis = (project.findProperty('prometheusAbis') ?: 'arm64-v8a').toString().split(',')
 android {
     namespace 'ai.prometheus.android'
     compileSdk 35
@@ -9,7 +10,7 @@ android {
         targetSdk 35
         versionCode 7
         versionName '1.7.0-nova-offline'
-        ndk { abiFilters 'arm64-v8a', 'x86_64' }
+        ndk { abiFilters.addAll(targetAbis.toList()) }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         externalNativeBuild { cmake {
             cppFlags '-std=c++17 -O2 -fexceptions'
