@@ -1,0 +1,39 @@
+name: Build Prometheus Android APK
+on:
+  push:
+    branches:
+      - prometheus/android-v1
+    paths:
+      - 'prometheus/**'
+      - '.github/workflows/prometheus-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK platform
+        run: yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+      - name: Unpack Prometheus source and verify
+        run: |
+          base64 --decode prometheus/project.tar.gz.b64 > source.tar.gz
+          echo "c9e7b7cdedb07ab455b1bbb3b5b83c9f393a20a4d92cbe0a94ee9aac1415c655  source.tar.gz" | sha256sum --check
+          tar -xzf source.tar.gz
+          mv Prometheus prometheus-build
+      - name: Assemble Android debug APK
+        run: gradle -p prometheus-build :app:assembleDebug --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Prometheus-Android-APK
+          path: prometheus-build/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
