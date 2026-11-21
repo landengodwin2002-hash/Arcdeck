@@ -25,8 +25,10 @@ jobs:
       - name: Install SDK and NDK
         run: |
           echo "Android SDK: $ANDROID_HOME"
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
-          yes | sdkmanager --licenses || true
+          SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          test -n "$SDKMGR" || { echo "Android sdkmanager missing"; find "$ANDROID_HOME" -maxdepth 3 -type f | head -30; exit 1; }
+          "$SDKMGR" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+          yes | "$SDKMGR" --licenses || true
       - name: Fetch compatible pinned llama.cpp inference source
         run: |
           mkdir -p prometheus/app/src/main/vendor
