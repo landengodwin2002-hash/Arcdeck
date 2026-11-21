@@ -11,3 +11,12 @@ __pycache__/
 *.password
 *.idsig
 *.apk
+
+/prometheus/local.properties
+/prometheus/.gradle/
+/prometheus/app/.cxx/
+/prometheus/app/build/
+/prometheus/app/src/main/vendor/
+
+/prometheus/build/
+/prometheus/test-results/
