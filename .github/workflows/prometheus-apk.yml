@@ -1,14 +1,10 @@
-name: Build Prometheus Android APK
+name: Build Prometheus v0.2 APK
 on:
   push:
-    branches:
-      - prometheus/android-v1
+    branches: [prometheus/android-v1]
     paths:
-      - 'prometheus/**'
+      - 'prometheus/v02_payload.txt'
       - '.github/workflows/prometheus-apk.yml'
-  pull_request:
-    branches: [main]
-    paths: ['prometheus/**', '.github/workflows/prometheus-apk.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,24 +17,24 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK platform
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
           yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' || true
-          ls -ld "$ANDROID_HOME/platforms/android-35"
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.12'
-      - name: Unpack Prometheus source and verify
+      - name: Extract and verify Prometheus source
         run: |
-          base64 --decode prometheus/project.tar.gz.b64 > source.tar.gz
-          echo "b47896525c6ce4f9c6e37febd3bb4b7826a635df371d4c62e26b5904985bbaf9  source.tar.gz" | sha256sum --check
-          tar -xzf source.tar.gz
-          mv Prometheus prometheus-build
-      - name: Assemble Android debug APK
-        run: gradle -p prometheus-build :app:assembleDebug --no-daemon --stacktrace
+          base64 --decode prometheus/v02_payload.txt > prometheus-v02.tar.gz
+          echo "70aa93747928162b0b86477f4f5f1fc2bd277ad2f17d819bf443aae2ad6b2d30  prometheus-v02.tar.gz" | sha256sum --check
+          tar -xzf prometheus-v02.tar.gz
+          test -f Prometheus/app/src/main/java/ai/prometheus/android/MainActivity.java
+      - name: Build APK
+        run: gradle -p Prometheus :app:assembleDebug --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: Prometheus-Android-APK
-          path: prometheus-build/app/build/outputs/apk/debug/*.apk
+          name: Prometheus-v0.2-Android-APK
+          path: Prometheus/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
