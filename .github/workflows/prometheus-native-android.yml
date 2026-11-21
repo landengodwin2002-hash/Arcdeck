@@ -1,0 +1,49 @@
+name: Prometheus Native ARM64 APK
+on:
+  push:
+    branches: [prometheus-native-app]
+  pull_request:
+    branches: [main]
+    paths: ['prometheus/**', '.github/workflows/prometheus-native-android.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Compile independent offline Prometheus APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install SDK and NDK
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+          yes | sdkmanager --licenses || true
+      - name: Fetch compatible pinned llama.cpp inference source
+        run: |
+          mkdir -p prometheus/app/src/main/vendor
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp prometheus/app/src/main/vendor/llama.cpp
+          cd prometheus/app/src/main/vendor/llama.cpp
+          git fetch --depth 1 origin 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
+          git checkout --detach 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
+      - name: Build debug-signed APK
+        working-directory: prometheus
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
+      - name: Verify valid APK
+        run: |
+          test -s prometheus/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l prometheus/app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libprometheus.so'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging prometheus/app/build/outputs/apk/debug/app-debug.apk | head -6
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Prometheus-Standalone-Abliterated-Android-APK
+          path: prometheus/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
