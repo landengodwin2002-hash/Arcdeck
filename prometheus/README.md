@@ -33,3 +33,22 @@ An offline Android ARM64 chatbot using a 4B abliterated GGUF in the app's own ll
 ## v1.4 Safe Chat changes
 
 Android 15/16 system bars and keyboard insets are handled explicitly for reachable chat controls. Chat messages are queued during model load rather than silently discarded, with visible inference progress. Termux sync now runs on its own worker and loads the model before processing all books. Book/memory/model setup still runs through Termux. This preview uses a separate package ID because earlier CI debug APKs had independent signing keys; old installations and their data remain intact. Use `prometheus-sync` again with the new app open for migration.
+
+## v1.5 persistent background work
+
+- Foreground service for active offline inference, model loading and local imports while switching applications. Android may still terminate the process for severe RAM pressure; partial output is checkpointed in SQLite and can be retried.
+- Activity recreation no longer explicitly stops native inference or unloads the model.
+- Pending prompts and chat history are saved; recent completed answers are refreshed on return.
+- Original archives and indexed knowledge sources are counted separately.
+- Setup through Termux remains independent of native offline conversation.
+- Separate preview package ID avoids old ephemeral debug signing conflicts and preserves previous versions.
+
+## v1.5 Termux-only verification
+1. Install the new APK (separate package ID because earlier debug builds have different signing certificates).
+2. In Termux, update the management script: `curl -fL https://raw.githubusercontent.com/landengodwin2002-hash/Arcdeck/prometheus-native-app/prometheus/termux/prometheus-sync.py -o "$PREFIX/bin/prometheus-sync" && chmod +x "$PREFIX/bin/prometheus-sync"`.
+3. Run `prometheus-sync --status` to check the actual found model, original books, indexed Termux passages, and memory databases.
+4. Run `prometheus-sync --model-only`, then open the new APK while the terminal command is running. It will receive and load the existing 4B abliterated GGUF.
+5. Run `prometheus-sync --probe`, return to the APK, and read the response printed in Termux. This is an actual inference test, not a connection test.
+6. Only then run `prometheus-sync --memory-only` and `prometheus-sync --books-only`, opening the app during each transfer. The original Termux data is not deleted.
+7. If a reply is interrupted, the chat page displays its saved unfinished response and a Retry option.
+8. For information on failures, run `prometheus-sync --diagnostics` after a sync.

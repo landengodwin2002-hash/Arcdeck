@@ -39,6 +39,43 @@ public final class MainActivity extends Activity {
     private static final int PICK_MODEL=51,PICK_BOOKS=52,PICK_PROJECT_FILE=53,PICK_MIGRATION=54,PICK_BOOK_FOLDER=55;
     private final ExecutorService jobs=Executors.newSingleThreadExecutor();
     private final ExecutorService syncJobs=Executors.newSingleThreadExecutor();
+    private static final java.util.concurrent.atomic.AtomicInteger foregroundOps=new java.util.concurrent.atomic.AtomicInteger(0);
+    private static volatile boolean sharedModelReady=false, sharedGenerating=false;
+    private static volatile String sharedModelPath="";
+    private long lastRenderedId=0, lastPartialSave=0;
+    private final Runnable chatWatcher=new Runnable(){
+        @Override public void run(){
+            if(db!=null && "Chat".equals(activeTab) && !busy && !sharedGenerating){
+                try{long newest=lastMessageId();
+                    if(newest>lastRenderedId){lastRenderedId=newest;loadSavedMessages();render();}
+                }catch(Exception ignored){}
+            }
+            main.postDelayed(this,1600);
+        }
+    };
+    private long lastMessageId(){
+        try(Cursor c=db.rawQuery("SELECT COALESCE(MAX(id),0) FROM messages",null)){
+            return c.moveToFirst()?c.getLong(0):0;
+        }
+    }
+    private void loadSavedMessages(){
+        messages.clear();
+        try(Cursor c=db.rawQuery("SELECT role,body FROM (SELECT id,role,body FROM messages ORDER BY id DESC LIMIT 100) ORDER BY id ASC",null)){
+            while(c.moveToNext())messages.add(new String[]{c.getString(0),c.getString(1)});
+        }
+    }
+    private void foregroundBegin(String reason){
+        if(foregroundOps.incrementAndGet()!=1)return;
+        try{Intent svc=new Intent(this,PrometheusWorkService.class);svc.putExtra("reason",reason);
+            startForegroundService(svc);
+        }catch(Exception ex){android.util.Log.w("Prometheus","Foreground processing unavailable",ex);foregroundOps.set(0);}
+    }
+    private void foregroundEnd(){
+        int remaining=foregroundOps.decrementAndGet();
+        if(remaining<=0){foregroundOps.set(0);
+            try{stopService(new Intent(this,PrometheusWorkService.class));}catch(Exception ignored){}
+        }
+    }
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ArrayList<String[]> messages=new ArrayList<>();
     private SQLiteDatabase db;
@@ -98,6 +135,8 @@ public final class MainActivity extends Activity {
         db.execSQL("CREATE TABLE IF NOT EXISTS book_files(id INTEGER PRIMARY KEY, title TEXT, sha256 TEXT UNIQUE, path TEXT, indexed_at INTEGER)");
         db.execSQL("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)");
         db.execSQL("CREATE TABLE IF NOT EXISTS imported_migrations(sha256 TEXT PRIMARY KEY, imported INTEGER)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS imported_rows(fingerprint TEXT PRIMARY KEY)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS generation_state(id INTEGER PRIMARY KEY CHECK(id=1), prompt TEXT, partial TEXT, stage TEXT, started INTEGER)");
         try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='profile'",null)){
             if(settings.moveToFirst())profile=settings.getString(0);
         }
@@ -115,22 +154,34 @@ public final class MainActivity extends Activity {
         }
         File models=new File(getFilesDir(),"models");models.mkdirs();
         File current=new File(models,"prometheus.gguf");if(current.isFile())modelFile=current;
+        if(modelFile!=null && sharedModelReady && sharedModelPath.equals(modelFile.getAbsolutePath())){
+            ready=true;modelName=getPreferences(MODE_PRIVATE).getString("model_label",modelFile.getName());
+        }
+        queuedPrompt=getSetting("queued_prompt","");
+        if(queuedPrompt.isEmpty())queuedPrompt=null;
+        lastRenderedId=lastMessageId();
         render();
 
-        if(modelFile!=null)loadModel(modelFile);
+        if(modelFile!=null && !ready)loadModel(modelFile);
     }
     @Override protected void onResume(){
         super.onResume();
+        main.removeCallbacks(chatWatcher);main.postDelayed(chatWatcher,1100);
         // The terminal starts a short-lived loopback sender. Simply opening Prometheus
         // imports the chosen model, books and knowledge without file pickers or pairing.
         if(db!=null && termuxSyncRunning.compareAndSet(false,true)){
             syncJobs.execute(()->{try{syncFromTermuxIfAvailable();}finally{termuxSyncRunning.set(false);}});
         }
     }
+    @Override protected void onPause(){
+        main.removeCallbacks(chatWatcher);
+        super.onPause();
+    }
     @Override public void onDestroy(){
-        cancelRequested=true;nativeStop();
-        jobs.execute(()->{nativeUnload();db.close();});
-        syncJobs.shutdownNow();jobs.shutdown();super.onDestroy();
+        main.removeCallbacks(chatWatcher);
+        // Generation and Termux import continue even if Android recreates this screen.
+        // The foreground service protects active work; old callback saves the reply to SQLite.
+        syncJobs.shutdown();jobs.shutdown();super.onDestroy();
     }
     private void installSafeArea(LinearLayout root){
         // API 35+ targets draw under the Android 15/16 bars by default.
@@ -149,7 +200,7 @@ public final class MainActivity extends Activity {
     }
     private void deliverQueuedPrompt(){
         if(!ready || busy || queuedPrompt==null)return;
-        String next=queuedPrompt;queuedPrompt=null;
+        String next=queuedPrompt;queuedPrompt=null;saveSetting("queued_prompt","");
         if(!"Chat".equals(activeTab)){activeTab="Chat";render();}
         if(composer!=null){composer.setText(next);send();}
     }
@@ -162,6 +213,7 @@ public final class MainActivity extends Activity {
         android.util.Log.i("PrometheusInference",detail);
         lastInferenceStatus=detail;
         try{saveSetting("last_inference",detail);}catch(Exception ignored){}
+        try{db.execSQL("UPDATE generation_state SET stage=? WHERE id=1",new Object[]{detail});}catch(Exception ignored){}
         runUI(()->{if(status!=null)status.setText("● "+detail);});
     }
     private void recordInference(String detail){
@@ -293,6 +345,24 @@ public final class MainActivity extends Activity {
         else showSettings();
     }
     private void showChat(){
+        try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
+            if(c.moveToFirst()){
+                final String question=c.getString(0), partial=c.getString(1), phase=c.getString(2);
+                TextView state=text(sharedGenerating?"● Generating in background: "+phase:
+                    "● Interrupted reply saved. You can retry it.",13,MINT,false);
+                pad(state,5,4,5,6);page.addView(state,lp(-1,-2));
+                if(!sharedGenerating){
+                    if(partial!=null && !partial.isEmpty()){
+                        TextView saved=text("Recovered partial answer:\n"+partial,13,MUTED,false);
+                        pad(saved,5,4,5,7);page.addView(saved,lp(-1,-2));
+                    }
+                    page.addView(button("Retry unfinished question",()->{
+                        db.execSQL("DELETE FROM generation_state WHERE id=1");
+                        if(composer!=null){composer.setText(question);send();}
+                    }),lp(-1,43));
+                }
+            }
+        }catch(Exception ignored){}
         scroller=new ScrollView(this);scroller.setFillViewport(true);
         thread=column();pad(thread,0,5,0,9);scroller.addView(thread);
         page.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
@@ -326,6 +396,14 @@ public final class MainActivity extends Activity {
     private void onNativeChunk(byte[] bytes){
         // JNI invokes this method on the background inference thread.
         synchronized(streamBytes){streamBytes.write(bytes,0,bytes.length);}
+        long moment=android.os.SystemClock.uptimeMillis();
+        if(moment-lastPartialSave>2000){
+            lastPartialSave=moment;
+            try{String draft; synchronized(streamBytes){draft=new String(streamBytes.toByteArray(),StandardCharsets.UTF_8);}
+                if(draft.length()>40000)draft=draft.substring(draft.length()-40000);
+                db.execSQL("UPDATE generation_state SET partial=?,stage='Streaming response' WHERE id=1",new Object[]{draft});
+            }catch(Exception ignored){}
+        }
         long now=android.os.SystemClock.uptimeMillis();
         if(now-lastDisplayMs>=100){
             lastDisplayMs=now;
@@ -339,7 +417,7 @@ public final class MainActivity extends Activity {
         if(composer==null)return;
         String q=composer.getText().toString().trim();if(q.isEmpty())return;
         if(!ready){
-            queuedPrompt=q;
+            queuedPrompt=q;saveSetting("queued_prompt",q);
             File stored=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
             if(!busy && stored.isFile())loadModel(stored);
             notify(stored.isFile()?"Message queued until the model finishes loading.":"No model installed yet. Run prometheus-sync in Termux and reopen the app.");
@@ -371,12 +449,15 @@ public final class MainActivity extends Activity {
         }
         messages.add(new String[]{"user",q});
         db.execSQL("INSERT INTO messages(role,body) VALUES(?,?)",new Object[]{"user",q});
+        db.execSQL("INSERT OR REPLACE INTO generation_state(id,prompt,partial,stage,started) VALUES(1,?,?,?,?)",
+            new Object[]{q,"","Queued",System.currentTimeMillis()});
+        sharedGenerating=true;foregroundBegin("Responding offline");
         addBubble("user",q);
         streamingBubble=addBubble("assistant","");
         scrollBottom();setBusy(true,"● Preparing response…");
         recordInference("Preparing response");
         synchronized(streamBytes){streamBytes.reset();}
-        lastDisplayMs=0;
+        lastPartialSave=0;lastDisplayMs=0;
         cancelRequested=false;
         jobs.execute(()->{
             String result;
@@ -423,6 +504,8 @@ public final class MainActivity extends Activity {
             }catch(Throwable ex){result="Inference failed: "+ex.getClass().getSimpleName()+": "+ex.getMessage();}
             recordInference(result.startsWith("ERROR:")||result.startsWith("Inference failed:")?result:"Last response: "+result.length()+" characters");
             String answer=result;
+            try{db.execSQL("DELETE FROM generation_state WHERE id=1");}catch(Exception ignored){}
+            sharedGenerating=false;foregroundEnd();
             runUI(()->{
                 setBusy(false,"● Model ready");
                 if(streamingBubble!=null){streamingBubble.setText(answer);streamingBubble=null;}
@@ -562,12 +645,20 @@ public final class MainActivity extends Activity {
                 throw new IOException("This is not a valid GGUF model");
         }
     }
-    private void loadModel(File f){setBusy(true,"● Loading on-device model…");jobs.execute(()->loadModelOnWorker(f));}
+    private void loadModel(File f){
+        if(sharedModelReady && f.getAbsolutePath().equals(sharedModelPath)){
+            ready=true;modelFile=f;modelName=f.getName();setBusy(false,"● Model ready");deliverQueuedPrompt();return;
+        }
+        foregroundBegin("Loading local model");
+        setBusy(true,"● Loading on-device model…");
+        jobs.execute(()->{try{loadModelOnWorker(f);}finally{foregroundEnd();}});
+    }
     private void loadModelOnWorker(File f){
         runUI(()->setBusy(true,"● Loading on-device model…"));
         String err;
         try{err=nativeLoad(f.getAbsolutePath());}catch(Throwable ex){err=ex.toString();}
         boolean ok="OK".equals(err);
+        sharedModelReady=ok;sharedModelPath=ok?f.getAbsolutePath():"";
         final String errorMessage=err;
         runUI(()->{ready=ok;modelFile=ok?f:null;modelName=ok?f.getName():"No model";
             setBusy(false,ok?"● Model ready":"● Model failed to load");
@@ -778,6 +869,15 @@ public final class MainActivity extends Activity {
                         if(line.length()>1000000)throw new IOException("Migration line too long");
                         if(line.isEmpty())continue;
                         JSONObject o=new JSONObject(line);String type=o.optString("type","");
+                        if("manifest".equals(type))continue;
+                        byte[] fpBytes=java.security.MessageDigest.getInstance("SHA-256").digest(o.toString().getBytes(StandardCharsets.UTF_8));
+                        StringBuilder fpHex=new StringBuilder();
+                        for(byte byteValue:fpBytes)fpHex.append(String.format(Locale.ROOT,"%02x",byteValue&255));
+                        String fingerprint=fpHex.toString();
+                        try(Cursor dupe=db.rawQuery("SELECT 1 FROM imported_rows WHERE fingerprint=?",new String[]{fingerprint})){
+                            if(dupe.moveToFirst())continue;
+                        }
+                        int before=imported;
                         switch(type){
                             case "message":{
                                 String role=o.optString("role","");String body=o.optString("body","");
@@ -814,6 +914,7 @@ public final class MainActivity extends Activity {
                                 break;
                             }
                         }
+                        if(imported>before)db.execSQL("INSERT OR IGNORE INTO imported_rows(fingerprint) VALUES(?)",new Object[]{fingerprint});
                     }
                     db.execSQL("INSERT INTO imported_migrations(sha256,imported) VALUES(?,?)",new Object[]{hash,System.currentTimeMillis()});
                     db.setTransactionSuccessful();
@@ -899,7 +1000,7 @@ public final class MainActivity extends Activity {
             conn.setRequestMethod("POST");conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type","application/json");
             JSONObject report=new JSONObject();
-            report.put("model_ready",ready);
+            report.put("model_ready",ready||sharedModelReady);
             report.put("model_name",modelName);
             report.put("last_inference",getSetting("last_inference","Not yet attempted"));
             report.put("timestamp",System.currentTimeMillis());
@@ -1010,6 +1111,26 @@ public final class MainActivity extends Activity {
                         finally{stage.delete();}
                     }
                 }catch(Exception e){failures++;android.util.Log.e("PrometheusSync","Item skipped: "+filename,e);}
+            }
+            if(manifest.optBoolean("probe",false)){
+                String testAnswer;
+                boolean testOk=false;
+                try{
+                    File model=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
+                    if(!sharedModelReady && !sharedModelLoading && model.isFile())loadModelOnWorker(model);
+                    if(!sharedModelReady)throw new IOException("Native GGUF engine is not ready. Transfer the 4B abliterated model first.");
+                    if(sharedGenerating)throw new IOException("A chat response is still generating. Retry the test afterward.");
+                    synchronized(streamBytes){streamBytes.reset();}
+                    String code=nativeGenerateStreaming("Reply in one short sentence: Hello, I am Prometheus.",48);
+                    synchronized(streamBytes){testAnswer=new String(streamBytes.toByteArray(),StandardCharsets.UTF_8);}
+                    if(testAnswer.trim().isEmpty())testAnswer=code;
+                    if(testAnswer.length()>250)testAnswer=testAnswer.substring(0,250);
+                    testOk=!testAnswer.trim().isEmpty() && !testAnswer.startsWith("ERROR:") && !testAnswer.startsWith("Inference failed:");
+                    recordInference("Native model test: "+(testOk?"answer generated":"failed")+"; "+testAnswer.length()+" characters");
+                }catch(Throwable ex){testAnswer="Probe failed: "+ex.toString();recordInference(testAnswer);}
+                syncSendDiagnostics();
+                syncFinish("{\"success\":"+testOk+",\"probe\":"+JSONObject.quote(testAnswer)+"}");
+                return;
             }
             final int restoredBooks=books,restoredModels=models,restoredMem=memories,errors=failures;
             syncFinish("{\"success\":true,\"models\":"+models+",\"books\":"+books+",\"migrations\":"+memories+",\"errors\":"+failures+"}");

@@ -49,9 +49,12 @@ def prepare_migration():
         def add(typ, **fields):
             out.write(json.dumps({'type':typ,**fields},ensure_ascii=False)+'\n')
             count[typ]=count.get(typ,0)+1
-        add('manifest',schema=1,source='Prometheus Termux',created=int(time.time()))
+        add('manifest',schema=2,source='Prometheus Termux')
         for role,body in database_rows(APP/'prometheus_chats.sqlite3','SELECT role,content FROM chats ORDER BY id','chats') or ():
             if role in ('user','assistant') and body: add('message',role=role,body=body)
+        for kind,title,body in database_rows(APP/'memory.sqlite3','SELECT kind,title,content FROM entries ORDER BY id','entries') or ():
+            content=(str(title)+' — ' if title else '')+str(body or '')
+            if content:add('memory',kind=kind or 'fact',body=content)
         for kind,title,body in database_rows(ROOT/'memory.sqlite3','SELECT kind,title,content FROM entries ORDER BY id','entries') or ():
             content=(str(title)+' — ' if title else '')+str(body or '')
             if content:add('memory',kind=kind or 'fact',body=content)
@@ -63,7 +66,7 @@ def prepare_migration():
                 if note:add('project_item',project=name,kind='note',body=note)
             for task,done in database_rows(APP/'companion.sqlite3',f'SELECT task,done FROM project_tasks WHERE project_id={int(pid)} ORDER BY id','project_tasks') or ():
                 if task:add('project_item',project=name,kind='task',body=task,done=int(bool(done)))
-        for book,body in database_rows(ROOT/'books.sqlite3','SELECT source,body FROM passages','passages') or ():
+        for book,body in database_rows(ROOT/'books.sqlite3','SELECT source,body FROM passages ORDER BY rowid','passages') or ():
             if body:add('passage',book=Path(book).name,body=body)
     temp.replace(MIGRATION)
     return count
@@ -136,6 +139,7 @@ def main():
     g.add_argument('--model-only',action='store_true',help='Send only an abliterated GGUF')
     g.add_argument('--books-only',action='store_true',help='Send only library books')
     g.add_argument('--memory-only',action='store_true',help='Send chats, projects, corrections and indexed passages')
+    g.add_argument('--probe',action='store_true',help='Run a native on-device AI generation test; result appears in Termux')
     ap.add_argument('--model',help='Explicit existing abliterated GGUF path')
     ap.add_argument('--include',action='append',default=[],metavar='BOOK_FOLDER',help='Extra book folder (repeatable)')
     ap.add_argument('--dry-run',action='store_true',help='Show what would be sent, without starting server')
@@ -146,27 +150,37 @@ def main():
         diag=APP/'native-diagnostics.json'
         print(diag.read_text(encoding='utf8') if diag.is_file() else 'No native diagnostics yet. Run prometheus-sync, open the APK, then retry this command.')
         return 0
-    send_model=not(args.books_only or args.memory_only)
-    send_books=not(args.model_only or args.memory_only)
-    send_memory=not(args.model_only or args.books_only)
+    send_model=not(args.books_only or args.memory_only or args.probe)
+    send_books=not(args.model_only or args.memory_only or args.probe)
+    send_memory=not(args.model_only or args.books_only or args.probe)
     if args.status:
         model=get_model(args.model)
         print('Selected abliterated model:',model or '(none found)')
         print('Termux library source files:',sum(1 for _ in scan_books(args.include)))
-        print('Native app ID: ai.prometheus.offline.pet; model is private to native app after sync')
+        print('Native app: Prometheus v1.5 (offline model remains private inside the APK)')
+        def rows_count(location,query):
+            try:
+                with sqlite3.connect(f'file:{location}?mode=ro',uri=True) as conn:
+                    return conn.execute(query).fetchone()[0]
+            except (sqlite3.Error,OSError):return 0
+        print('Indexed Termux knowledge passages:',rows_count(ROOT/'books.sqlite3','SELECT COUNT(*) FROM passages'))
+        print('Stored memories:',rows_count(APP/'memory.sqlite3','SELECT COUNT(*) FROM entries'))
+        print('Saved conversations:',rows_count(APP/'prometheus_chats.sqlite3','SELECT COUNT(*) FROM chats'))
+        print('Archived book originals:',sum(1 for _ in (ROOT/'knowledge'/'originals').glob('*') if _.is_file()))
         return 0
     sources=[]
+    # Model goes first; never block the first usable conversation behind a large book import.
+    if send_model:
+        model=get_model(args.model)
+        if model:sources.append(('model',model,model.name))
+        else:print('WARNING: No locally accessible abliterated GGUF. Model not sent.',file=sys.stderr)
     if send_memory:
         count=prepare_migration()
         print('Memory export:',', '.join(f'{n} {k}' for k,n in count.items()),flush=True)
         sources.append(('migration', MIGRATION, 'Prometheus-Native-Migration.jsonl'))
     if send_books:
         for f in scan_books(args.include):sources.append(('book',f,f.name))
-    if send_model:
-        model=get_model(args.model)
-        if model:sources.append(('model',model,model.name))
-        else:print('WARNING: No locally accessible abliterated GGUF. Model not sent.',file=sys.stderr)
-    if not sources:
+    if not sources and not args.probe:
         print('No model, migration or books to transfer. Try: prometheus-sync --status',file=sys.stderr)
         return 2
     print(f'Preparing {len(sources)} transfer file(s); verifying SHA-256 fingerprints...',flush=True)
@@ -188,7 +202,7 @@ def main():
     if args.dry_run:return 0
     if len(entries)>3000:print('Too many transfer items',file=sys.stderr);return 2
     complete=threading.Event();result={}
-    manifest=json.dumps({'protocol':'prometheus-local-transfer-v1','items':entries},ensure_ascii=False).encode('utf8')
+    manifest=json.dumps({'protocol':'prometheus-local-transfer-v1','items':entries,'probe':args.probe},ensure_ascii=False).encode('utf8')
     if len(manifest)>2_000_000:print('Manifest too large',file=sys.stderr);return 2
 
     class Handler(BaseHTTPRequestHandler):
@@ -237,7 +251,7 @@ def main():
         return 2
     t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':0.2},daemon=True)
     t.start()
-    print('\nLOCAL TRANSFER READY. Open the installed Prometheus APK now.',flush=True)
+    print('\nLOCAL TRANSFER READY. Open Prometheus v1.5 now.' if not args.probe else '\nNATIVE MODEL PROBE READY. Open Prometheus v1.5 to start the on-device test.',flush=True)
     print('It will automatically import when you return to it. No file picking or pairing.',flush=True)
     print('Do not close Termux until it reports completion. Works without internet.',flush=True)
     try:
