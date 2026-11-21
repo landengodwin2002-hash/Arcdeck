@@ -32,7 +32,7 @@ jobs:
       - name: Unpack Prometheus native Android project
         run: |
           base64 --decode prometheus-native/source.tar.gz.b64 > native-source.tar.gz
-          echo "75ded7164e0109c35810068376ddf7346112f3b9164a888e1a6ad4ef67de8b5c  native-source.tar.gz" | sha256sum -c -
+          echo "56d26838d4dffa97171480d27ce10f8c65b1ab0d1413261e0d12e94cdeebb8a9  native-source.tar.gz" | sha256sum -c -
           tar -xzf native-source.tar.gz
           mkdir -p Prometheus-Native/vendor
       - name: Fetch pinned llama.cpp inference engine
