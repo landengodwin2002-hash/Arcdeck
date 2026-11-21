@@ -98,7 +98,10 @@ Java_ai_prometheus_android_MainActivity_nativeGenerateStreaming(JNIEnv *env,jobj
             int len=std::min(128,n-start);
             fill(batch,tokens.data()+start,len,start,start+len==n);
             if(llama_process(ctx,LLAMA_PROCESS_TYPE_DECODE,batch)){decoded=false;break;}
-            if(start==0)stage(env,thiz,on_status,"Processing your message...");
+            if(start==0 || (start / 128) % 4 == 0) {
+                std::string progress = "Reading prompt "+std::to_string(std::min(start+len,n))+"/"+std::to_string(n)+" tokens...";
+                stage(env,thiz,on_status,progress.c_str());
+            }
         }
         if(!decoded){llama_batch_ext_free(batch);failure="ERROR: The model failed to process this prompt. Try a shorter question.";return -1;}
         stage(env,thiz,on_status,"Generating answer on device...");

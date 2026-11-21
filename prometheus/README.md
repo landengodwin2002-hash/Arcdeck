@@ -29,3 +29,7 @@ An offline Android ARM64 chatbot using a 4B abliterated GGUF in the app's own ll
 - No remote/cloud connection is needed to chat. A temporary localhost Termux server is used only for import, and is not cryptographically authenticated. Only start it while transferring files.
 - Recognition of scanned PDFs still needs OCR; advanced retrieval remains keyword-based; direct app self-modification and advanced tools are not yet implemented.
 - Pet feedback is persistent contextual preference data, not neural-weight fine-tuning. Its displayed happiness or distress is fictional.
+
+## v1.4 Safe Chat changes
+
+Android 15/16 system bars and keyboard insets are handled explicitly for reachable chat controls. Chat messages are queued during model load rather than silently discarded, with visible inference progress. Termux sync now runs on its own worker and loads the model before processing all books. Book/memory/model setup still runs through Termux. This preview uses a separate package ID because earlier CI debug APKs had independent signing keys; old installations and their data remain intact. Use `prometheus-sync` again with the new app open for migration.

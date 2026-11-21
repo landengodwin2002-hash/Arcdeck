@@ -38,6 +38,7 @@ public final class MainActivity extends Activity {
     private static final String MODEL_URL="https://huggingface.co/mradermacher/Huihui-Qwen3.5-4B-abliterated-GGUF/resolve/main/Huihui-Qwen3.5-4B-abliterated.Q4_K_M.gguf?download=true";
     private static final int PICK_MODEL=51,PICK_BOOKS=52,PICK_PROJECT_FILE=53,PICK_MIGRATION=54,PICK_BOOK_FOLDER=55;
     private final ExecutorService jobs=Executors.newSingleThreadExecutor();
+    private final ExecutorService syncJobs=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ArrayList<String[]> messages=new ArrayList<>();
     private SQLiteDatabase db;
@@ -53,6 +54,7 @@ public final class MainActivity extends Activity {
     private int outputTokens=384;
     private int currentProject=-1;
     private boolean ready=false,busy=false;
+    private String queuedPrompt=null;
     private volatile boolean cancelRequested=false;
     private TextView streamingBubble;
     private final ByteArrayOutputStream streamBytes=new ByteArrayOutputStream();
@@ -84,6 +86,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
+        if(Build.VERSION.SDK_INT>=29)getWindow().setNavigationBarContrastEnforced(false);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         PDFBoxResourceLoader.init(getApplicationContext());
         db=openOrCreateDatabase("prometheus-native.db",MODE_PRIVATE,null);
@@ -121,13 +124,34 @@ public final class MainActivity extends Activity {
         // The terminal starts a short-lived loopback sender. Simply opening Prometheus
         // imports the chosen model, books and knowledge without file pickers or pairing.
         if(db!=null && termuxSyncRunning.compareAndSet(false,true)){
-            jobs.execute(()->{try{syncFromTermuxIfAvailable();}finally{termuxSyncRunning.set(false);}});
+            syncJobs.execute(()->{try{syncFromTermuxIfAvailable();}finally{termuxSyncRunning.set(false);}});
         }
     }
     @Override public void onDestroy(){
         cancelRequested=true;nativeStop();
         jobs.execute(()->{nativeUnload();db.close();});
-        jobs.shutdown();super.onDestroy();
+        syncJobs.shutdownNow();jobs.shutdown();super.onDestroy();
+    }
+    private void installSafeArea(LinearLayout root){
+        // API 35+ targets draw under the Android 15/16 bars by default.
+        // Insets also keep the composer above the keyboard and gesture navigation.
+        if(Build.VERSION.SDK_INT>=30){
+            getWindow().setDecorFitsSystemWindows(false);
+            root.setOnApplyWindowInsetsListener((v,insets)->{
+                android.graphics.Insets sys=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
+                android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());
+                int bottom=Math.max(sys.bottom,ime.bottom);
+                v.setPadding(sys.left,sys.top,sys.right,bottom);
+                return insets;
+            });
+            root.requestApplyInsets();
+        }else root.setFitsSystemWindows(true);
+    }
+    private void deliverQueuedPrompt(){
+        if(!ready || busy || queuedPrompt==null)return;
+        String next=queuedPrompt;queuedPrompt=null;
+        if(!"Chat".equals(activeTab)){activeTab="Chat";render();}
+        if(composer!=null){composer.setText(next);send();}
     }
     private void setBusy(boolean b,String message){
         busy=b;
@@ -137,6 +161,7 @@ public final class MainActivity extends Activity {
     private void onNativeStatus(String detail){
         android.util.Log.i("PrometheusInference",detail);
         lastInferenceStatus=detail;
+        try{saveSetting("last_inference",detail);}catch(Exception ignored){}
         runUI(()->{if(status!=null)status.setText("● "+detail);});
     }
     private void recordInference(String detail){
@@ -250,11 +275,11 @@ public final class MainActivity extends Activity {
             }).setPositiveButton("Close",null).show();
     }
     private void render(){
-        LinearLayout root=column();root.setBackgroundColor(BG);setContentView(root);
-        LinearLayout header=row();pad(header,10,5,12,4);root.addView(header,lp(-1,68));
+        LinearLayout root=column();root.setBackgroundColor(BG);root.setFocusableInTouchMode(true);setContentView(root);installSafeArea(root);
+        LinearLayout header=row();pad(header,10,3,12,3);root.addView(header,lp(-1,62));
         petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
         petView.setContentDescription("Open interactive Prometheus companion");
-        petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(66,56));
+        petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(56,50));
         LinearLayout title=column();pad(title,9,0,0,0);
         header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
         TextView titleText=text("PROMETHEUS",17,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
@@ -311,9 +336,20 @@ public final class MainActivity extends Activity {
     }
     private volatile long lastDisplayMs=0;
     private void send(){
-        if(composer==null || busy)return;
+        if(composer==null)return;
         String q=composer.getText().toString().trim();if(q.isEmpty())return;
-        if(!ready){notify("No model yet. Run prometheus-sync in Termux, then reopen Prometheus.");return;}
+        if(!ready){
+            queuedPrompt=q;
+            File stored=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
+            if(!busy && stored.isFile())loadModel(stored);
+            notify(stored.isFile()?"Message queued until the model finishes loading.":"No model installed yet. Run prometheus-sync in Termux and reopen the app.");
+            if(status!=null)status.setText("● Message queued — loading offline model");
+            return;
+        }
+        if(busy){
+            notify("Prometheus is already responding. Use Stop before sending another message.");
+            return;
+        }
         composer.setText("");
         ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);
         if(q.startsWith("/remember ") || q.startsWith("/correct ")){
@@ -340,6 +376,7 @@ public final class MainActivity extends Activity {
         scrollBottom();setBusy(true,"● Preparing response…");
         recordInference("Preparing response");
         synchronized(streamBytes){streamBytes.reset();}
+        lastDisplayMs=0;
         cancelRequested=false;
         jobs.execute(()->{
             String result;
@@ -348,21 +385,21 @@ public final class MainActivity extends Activity {
                 boolean research=q.toLowerCase(Locale.ROOT).matches("(?s).*(book|manual|reference|cite|source|research|textbook|how do i fix|wiring|circuit|repair|troubleshoot|chemistry|electrical|formula).*?");
                 String evidence=research?searchBooks(q):"";
                 StringBuilder context=new StringBuilder();
-                try(Cursor c=db.rawQuery("SELECT kind,body FROM memory ORDER BY id DESC LIMIT 18",null)){
+                try(Cursor c=db.rawQuery("SELECT kind,body FROM memory ORDER BY id DESC LIMIT 8",null)){
                     while(c.moveToNext()){
                         String body=c.getString(1);if(body==null)continue;
-                        context.append("Saved ").append(c.getString(0)).append(": ").append(body,0,Math.min(body.length(),250)).append("\n");
+                        context.append("Saved ").append(c.getString(0)).append(": ").append(body,0,Math.min(body.length(),145)).append("\n");
                     }
                 }
-                int start=Math.max(0,messages.size()-7);
+                int start=Math.max(0,messages.size()-5);
                 for(int i=start;i<messages.size()-1;i++){
                     String[] m=messages.get(i);String body=m[1];
-                    if(body.length()>950)body=body.substring(0,950);
+                    if(body.length()>480)body=body.substring(0,480);
                     context.append(m[0]).append(": ").append(body).append("\n");
                 }
-                if(context.length()>3900)context.delete(0,context.length()-3900);
+                if(context.length()>2200)context.delete(0,context.length()-2200);
                 StringBuilder prompt=new StringBuilder();
-                String instructions=profile.length()>750?profile.substring(0,750):profile;
+                String instructions=profile.length()>550?profile.substring(0,550):profile;
                 prompt.append("PERSONALIZATION: ").append(instructions).append("\n\n");
                 if(currentProject>0){
                     try(Cursor pc=db.rawQuery("SELECT name,description FROM projects WHERE id=?",new String[]{String.valueOf(currentProject)})){
@@ -372,9 +409,9 @@ public final class MainActivity extends Activity {
                         while(notes.moveToNext())prompt.append("Project ").append(notes.getString(0)).append(": ").append(notes.getString(1)).append("\n");
                     }
                 }
-                if(!evidence.isEmpty())prompt.append("REFERENCE PASSAGES (support, not an answer):\n").append(evidence,0,Math.min(evidence.length(),1500)).append("\n\n");
+                if(!evidence.isEmpty())prompt.append("REFERENCE PASSAGES (support, not an answer):\n").append(evidence,0,Math.min(evidence.length(),850)).append("\n\n");
                 prompt.append("RECENT CONVERSATION:\n").append(context).append("\nUSER: ").append(q);
-                if(prompt.length()>6200)prompt.delete(0,prompt.length()-6200);
+                if(prompt.length()>4200)prompt.delete(0,prompt.length()-4200);
                 recordInference("Prompt prepared: "+prompt.length()+" characters");
                 String code=nativeGenerateStreaming(prompt.toString(),outputTokens);
                 synchronized(streamBytes){
@@ -534,6 +571,7 @@ public final class MainActivity extends Activity {
         final String errorMessage=err;
         runUI(()->{ready=ok;modelFile=ok?f:null;modelName=ok?f.getName():"No model";
             setBusy(false,ok?"● Model ready":"● Model failed to load");
+            if(ok)deliverQueuedPrompt();
             if(!ok)new AlertDialog.Builder(this).setTitle("Model loading failed").setMessage(errorMessage).setPositiveButton("Choose model",(d,w)->modelDialog()).setNegativeButton("Close",null).show();
         });
     }
@@ -928,7 +966,7 @@ public final class MainActivity extends Activity {
             syncSendDiagnostics();
             org.json.JSONArray items=manifest.getJSONArray("items");
             if(items.length()>3000)throw new IOException("Too many transfer files");
-            runUI(()->setBusy(true,"● Importing from Termux…"));
+            runUI(()->{if(!ready && !busy)setBusy(true,"● Importing model from Termux…");});
             int books=0,memories=0,models=0,failures=0;
             for(int i=0;i<items.length();i++){
                 JSONObject item=items.getJSONObject(i);
@@ -944,7 +982,9 @@ public final class MainActivity extends Activity {
                         File target=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
                         String expected=item.getString("sha256");
                         if(target.isFile() && target.length()==item.getLong("size") && sha256(target).equals(expected)){
-                            models++;continue;
+                            models++;
+                            if(!ready)loadModelOnWorker(target);
+                            continue;
                         }
                         File staging=new File(new File(getFilesDir(),"models"),"sync-abliterated.gguf");
                         syncTransfer(item,staging);verifyGGUF(staging);
@@ -954,6 +994,7 @@ public final class MainActivity extends Activity {
                         if(!staging.renameTo(target))throw new IOException("Cannot activate abliterated GGUF");
                         getPreferences(MODE_PRIVATE).edit().putString("model_label",filename).apply();
                         models++;
+                        loadModelOnWorker(target);
                     }else if("migration".equals(kind)){
                         if(!lower.endsWith(".jsonl") || item.getLong("size")>1024L*1024*1024)throw new IOException("Invalid memory file");
                         File stage=new File(getCacheDir(),"prometheus-sync-migration.jsonl");
@@ -972,10 +1013,10 @@ public final class MainActivity extends Activity {
             }
             final int restoredBooks=books,restoredModels=models,restoredMem=memories,errors=failures;
             syncFinish("{\"success\":true,\"models\":"+models+",\"books\":"+books+",\"migrations\":"+memories+",\"errors\":"+failures+"}");
-            runUI(()->{updateBookCount();setBusy(false,ready?"● Model ready":"● Preparing model…");
+            runUI(()->{updateBookCount();if(!busy)setBusy(false,ready?"● Model ready":"● Preparing model…");
                 Toast.makeText(this,"Termux sync: "+restoredModels+" model, "+restoredBooks+" books, "+restoredMem+" migration; "+errors+" errors",Toast.LENGTH_LONG).show();});
             File model=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
-            if(model.isFile() && (models>0 || modelFile==null))loadModelOnWorker(model);
+            if(model.isFile() && !ready)loadModelOnWorker(model);
         }catch(java.net.ConnectException ignored){/* No sender: ordinary offline chat, no delay. */}
         catch(Exception e){android.util.Log.e("PrometheusSync","Local transfer failed",e);
             final String error=e.getMessage();syncFinish("{\"success\":false,\"message\":"+JSONObject.quote(error==null?"Unknown":error)+"}");
