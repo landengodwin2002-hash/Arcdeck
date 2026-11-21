@@ -1,0 +1,54 @@
+name: Build Prometheus Native APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [prometheus/native-v04]
+    paths:
+      - 'prometheus-native/**'
+      - '.github/workflows/prometheus-native.yml'
+permissions:
+  contents: read
+jobs:
+  native-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build tools
+        run: |
+          yes | sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1" || true
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+      - name: Unpack Prometheus native Android project
+        run: |
+          base64 --decode prometheus-native/source.tar.gz.b64 > native-source.tar.gz
+          echo "2627734e1d810064807276fd11dcd20d71a9b86cbac45b46059a7c6be4730358  native-source.tar.gz" | sha256sum -c -
+          tar -xzf native-source.tar.gz
+          mkdir -p Prometheus-Native/vendor
+      - name: Fetch pinned llama.cpp inference engine
+        run: |
+          git clone --quiet --depth 1 https://github.com/ggml-org/llama.cpp Prometheus-Native/vendor/llama.cpp
+          cd Prometheus-Native/vendor/llama.cpp
+          git fetch --quiet --depth 1 origin 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
+          git checkout --quiet 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
+      - name: Build standalone native APK
+        run: gradle -p Prometheus-Native :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify packaged native engine
+        run: |
+          APK=$(find Prometheus-Native/app/build/outputs/apk/debug -name '*.apk' | head -1)
+          test -n "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libprometheus.so'
+          unzip -t "$APK" | tail -1
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Prometheus-Native-v0.4-APK
+          path: Prometheus-Native/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
