@@ -161,6 +161,7 @@ public final class MainActivity extends Activity {
         }
         queuedPrompt=getSetting("queued_prompt","");
         if(queuedPrompt.isEmpty())queuedPrompt=null;
+        loadPetState();
         lastRenderedId=lastMessageId();
         render();
         if(ready && queuedPrompt!=null)main.postDelayed(this::deliverQueuedPrompt,400);
@@ -393,9 +394,9 @@ public final class MainActivity extends Activity {
         companionBar.setBackground(bg(0xff1a2540,14,0xff47456d));
         TextView petMoodText=text("✦ Promie  ·  "+(petMood>65?"Happy":petMood>35?"Calm":"Needs attention"),13,PINK,true);
         companionBar.addView(petMoodText,new LinearLayout.LayoutParams(0,dp(35),1f));
-        Button feedBtn=button("Feed",()->{petAction("feed");render();});feedBtn.setTextSize(12);
+        Button feedBtn=button("Feed",()->{petAction("feed");petMoodText.setText("✦ Promie  ·  Happy");});feedBtn.setTextSize(12);
         companionBar.addView(feedBtn,lp(61,35));
-        Button praiseBtn=button("♡",()->{petAction("praise");render();});praiseBtn.setTextSize(17);praiseBtn.setContentDescription("Praise your companion");
+        Button praiseBtn=button("♡",()->{petAction("praise");petMoodText.setText("✦ Promie  ·  Happy");});praiseBtn.setTextSize(17);praiseBtn.setContentDescription("Praise your companion");
         companionBar.addView(praiseBtn,lp(43,35));
         page.addView(companionBar,lp(-1,42));
         scroller=new ScrollView(this);scroller.setFillViewport(true);
@@ -405,6 +406,13 @@ public final class MainActivity extends Activity {
             TextView empty=text("Ask anything.\nPrometheus works privately on your phone.\n\nTap the flame to feed your companion.",17,MUTED,false);
             empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
         }else for(String[] m:messages)addBubble(m[0],m[1]);
+        if(sharedGenerating){
+            String partial="";
+            try(Cursor current=db.rawQuery("SELECT partial FROM generation_state WHERE id=1",null)){
+                if(current.moveToFirst())partial=current.getString(0);
+            }catch(Exception ignored){}
+            streamingBubble=addBubble("assistant",partial==null?"":partial);
+        }else streamingBubble=null;
         LinearLayout sendbar=row();
         GradientDrawable composerBg=new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
             new int[]{0xff1a294b,0xff252443,0xff432a5d});
