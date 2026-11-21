@@ -6,6 +6,9 @@ on:
     paths:
       - 'prometheus/**'
       - '.github/workflows/prometheus-apk.yml'
+  pull_request:
+    branches: [main]
+    paths: ['prometheus/**', '.github/workflows/prometheus-apk.yml']
   workflow_dispatch:
 permissions:
   contents: read
