@@ -100,7 +100,7 @@ public class OfflineConversationTest {
         assertFalse(answer.contains("<|im_"));
         assertFalse(answer.contains("\uFFFD"));
         try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM generation_state",null)){c.moveToFirst();assertEquals(0,c.getInt(0));}
-        instrumentation.startActivitySync(open);
+        instrumentation.runOnMainSync(()->context.startActivity(open));
         await("The screen did not reopen",()->foreground()!=null,30);
         assertEquals(answer,lastAssistant(db));
         try(Cursor c=db.rawQuery("SELECT body FROM memory WHERE kind='test'",null)){assertTrue(c.moveToFirst());assertEquals("migration sentinel",c.getString(0));}

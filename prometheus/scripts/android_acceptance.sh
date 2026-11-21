@@ -9,10 +9,30 @@ adb install -r "$apk"
 adb install -r "$tests"
 # Exercise the real Termux maintenance protocol, not a file injection shortcut.
 adb reverse tcp:18765 tcp:18765
-python3 termux/prometheus-sync.py --model-only --model "$model" > test-results/model-install.txt 2>&1 &
-sender=$!
-adb shell am start -W -n ai.prometheus.offline.nova/ai.prometheus.android.MainActivity
-wait "$sender"
+transfer() {
+    adb shell input keyevent KEYCODE_HOME
+    python3 termux/prometheus-sync.py "$@" > "test-results/transfer-$1.txt" 2>&1 &
+    sender=$!
+    python3 - <<'WAIT'
+import json,time,urllib.request
+for _ in range(300):
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:18765/manifest',timeout=1) as response:
+            if json.load(response).get('protocol')=='prometheus-local-transfer-v1':break
+    except Exception:time.sleep(1)
+else:raise SystemExit('Termux transfer sender did not become ready')
+WAIT
+    adb shell am start -W -n ai.prometheus.offline.nova/ai.prometheus.android.MainActivity
+    wait "$sender"
+}
+trap 'adb logcat -d > test-results/logcat.txt; adb reverse --remove tcp:18765 >/dev/null 2>&1 || true' EXIT
+transfer --model-only --model "$model"
+python3 - <<'BOOK'
+from pathlib import Path
+Path('test-results/maintenance-original.txt').write_text('Prometheus maintenance fixture: original book bytes are preserved. '*12)
+BOOK
+transfer --books-only --include "$PWD/test-results/maintenance-original.txt"
+transfer --probe
 adb reverse --remove tcp:18765
 adb shell settings put global airplane_mode_on 1
 adb shell svc wifi disable
@@ -25,6 +45,7 @@ grep -q 'REAL_MODEL_STREAM_BACKGROUND_RECREATE_FOLLOWUP_STOP_PASS' test-results/
 # A full process restart must still expose the committed conversation and original data.
 adb shell am force-stop ai.prometheus.offline.nova
 adb shell am start -W -n ai.prometheus.offline.nova/ai.prometheus.android.MainActivity
+adb shell am force-stop ai.prometheus.offline.nova
 adb exec-out run-as ai.prometheus.offline.nova cat databases/prometheus-native.db > test-results/restarted.db
 adb exec-out run-as ai.prometheus.offline.nova cat databases/prometheus-native.db-wal > test-results/restarted.db-wal || true
 adb shell am force-stop ai.prometheus.offline.nova
