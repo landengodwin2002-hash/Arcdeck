@@ -9,6 +9,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.MotionEvent;
 import android.widget.EditText;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -63,10 +64,23 @@ public class OfflineConversationTest {
     }
     private void send(String text) {
         Activity activity=foreground(); assertNotNull(activity);
+        int[] point=new int[2];
+        instrumentation.runOnMainSync(() -> {
+            EditText input=composer(activity.getWindow().getDecorView());assertNotNull(input);
+            input.getLocationOnScreen(point);point[0]+=input.getWidth()/2;point[1]+=input.getHeight()/2;
+            input.setText("");
+        });
+        long now=SystemClock.uptimeMillis();
+        instrumentation.sendPointerSync(MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,point[0],point[1],0));
+        instrumentation.sendPointerSync(MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,point[0],point[1],0));
+        instrumentation.waitForIdleSync();
+        instrumentation.sendStringSync(text);
         instrumentation.runOnMainSync(() -> {
             View root=activity.getWindow().getDecorView();
-            EditText input=composer(root); assertNotNull(input);input.setText(text);
-            View send=action(root,"Send message to offline model");assertNotNull(send);assertTrue(send.performClick());
+            EditText input=composer(root);assertNotNull(input);assertTrue(input.hasFocus());
+            assertEquals("Keyboard input did not reach the composer",text,input.getText().toString());
+            View send=action(root,"Send message to offline model");assertNotNull(send);assertTrue(send.isShown());
+            assertTrue(send.performClick());
         });
     }
     private String lastAssistant(SQLiteDatabase db) {

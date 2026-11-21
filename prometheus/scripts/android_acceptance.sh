@@ -37,6 +37,7 @@ adb reverse --remove tcp:18765
 adb shell settings put global airplane_mode_on 1
 adb shell svc wifi disable
 adb shell svc data disable
+adb shell settings put secure show_ime_with_hard_keyboard 1
 adb logcat -c
 adb shell am instrument -w -r ai.prometheus.offline.nova.test/androidx.test.runner.AndroidJUnitRunner | tee test-results/instrumentation.txt
 adb logcat -d > test-results/logcat.txt

@@ -33,7 +33,7 @@ jobs:
         run: python3 prometheus/scripts/fetch_runtime.py
       - name: Build the same app for phone and emulator; verify stream framing
         working-directory: prometheus
-        run: gradle --no-daemon --max-workers=3 :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+        run: gradle --no-daemon --max-workers=3 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Fetch the exact existing 4B abliterated GGUF for runtime tests
         run: |
           mkdir -p "$RUNNER_TEMP/prometheus-model"

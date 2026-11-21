@@ -44,7 +44,7 @@ public final class MainActivity extends Activity {
             if(runtime==null || isDestroyed())return;
             boolean changed=sharedGenerating!=runtime.generating || sharedModelLoading!=runtime.loading || ready!=runtime.ready;
             sharedGenerating=runtime.generating;sharedModelLoading=runtime.loading;
-            sharedModelReady=runtime.ready;ready=runtime.ready;sharedModelPath=runtime.path;
+            sharedModelReady=runtime.ready&&runtime.engine.isHealthy();ready=sharedModelReady;sharedModelPath=runtime.path;
             busy=runtime.generating||runtime.loading;
             latestStage=runtime.stage;lastInferenceStatus=runtime.stage;inferenceStartedAt=runtime.started;
             if(db!=null){
@@ -110,8 +110,8 @@ public final class MainActivity extends Activity {
         TextView t=new TextView(this);t.setText(v);t.setTextSize(size);t.setTextColor(color);
         if(bold)t.setTypeface(Typeface.DEFAULT,Typeface.BOLD);return t;
     }
-    private LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
-    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    private LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
+    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private void pad(View v,int a,int b,int c,int d){v.setPadding(dp(a),dp(b),dp(c),dp(d));}
     private LinearLayout.LayoutParams lp(int w,int h){return new LinearLayout.LayoutParams(w<0?w:dp(w),h<0?h:dp(h));}
     private Button button(String label,Runnable action){
@@ -978,7 +978,7 @@ public final class MainActivity extends Activity {
             conn.setRequestMethod("POST");conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type","application/json");
             JSONObject report=new JSONObject();
-            report.put("model_ready",ready||sharedModelReady);
+            report.put("model_ready",runtime.ready&&runtime.engine.isHealthy());
             report.put("model_name",modelName);
             report.put("last_inference",getSetting("last_inference","Not yet attempted"));
             report.put("timestamp",System.currentTimeMillis());
@@ -1096,9 +1096,9 @@ public final class MainActivity extends Activity {
                 boolean testOk=false;
                 try{
                     File model=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
-                    if(!sharedModelReady && !sharedModelLoading && model.isFile())loadModelOnWorker(model);
-                    if(!sharedModelReady)throw new IOException("Native GGUF engine is not ready. Transfer the 4B abliterated model first.");
-                    if(sharedGenerating)throw new IOException("A chat response is still generating. Retry the test afterward.");
+                    if(!runtime.ready && model.isFile())loadModelOnWorker(model);
+                    if(!runtime.ready || !runtime.engine.isHealthy())throw new IOException("Offline runtime is not ready: "+runtime.stage);
+                    if(runtime.generating)throw new IOException("A chat response is still generating. Retry the test afterward.");
                     testAnswer=runtime.probe();
                     testOk=!testAnswer.trim().isEmpty();
                     if(testAnswer.length()>250)testAnswer=testAnswer.substring(0,250);

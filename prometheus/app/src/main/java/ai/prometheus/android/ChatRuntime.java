@@ -44,7 +44,12 @@ final class ChatRuntime {
         if (generating || loading || replacing) throw new IllegalStateException("Wait for the active conversation or model installation to finish");
         loading = true; ready = false; path = file.getAbsolutePath();
         stage("Loading on-device model…");
-        PrometheusWorkService.begin(context, "Loading local model");
+        try { PrometheusWorkService.begin(context, "Loading local model"); }
+        catch (RuntimeException error) {
+            loading = false;
+            stage("ERROR: Cannot start model loading: " + error);
+            return CompletableFuture.completedFuture(null);
+        }
         load = work.submit(() -> {
             try {
                 engine.load(file); ready = true; stage("Model ready");
@@ -66,7 +71,13 @@ final class ChatRuntime {
         partial = ""; started = System.currentTimeMillis(); generating = true;
         engine.resetCancellation();
         stage("Preparing response…");
-        PrometheusWorkService.begin(context, "Responding offline");
+        try { PrometheusWorkService.begin(context, "Responding offline"); }
+        catch (RuntimeException error) {
+            String failure = "ERROR: Cannot start background processing: " + error;
+            store.finish("", failure, false);
+            generating = false; started = 0; stage(failure);
+            return true;
+        }
         work.execute(() -> {
             PowerManager.WakeLock wake = ((PowerManager) context.getSystemService(Context.POWER_SERVICE))
                     .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Prometheus:conversation");
