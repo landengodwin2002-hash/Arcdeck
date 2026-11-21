@@ -44,16 +44,11 @@ public final class MainActivity extends Activity {
     private LinearLayout page,thread,toolbar;
     private ScrollView scroller;
     private EditText composer;
-    private TextView status,bookCount,avatar;
-    private int chatFontSize=18;
-    private boolean avatarBlink=false;
-    private final Runnable avatarAnimation=new Runnable(){
-        @Override public void run(){
-            avatarBlink=!avatarBlink;
-            if(avatar!=null)avatar.setText(busy? (avatarBlink?"◕_◕":"◕o◕") : (avatarBlink?"◡‿◡":"◕‿◕"));
-            main.postDelayed(this,1350);
-        }
-    };
+    private TextView status,bookCount;
+    private PrometheusPetView petView;
+    private int petHunger=28,petMood=72,petTrust=60;
+    private String lastInferenceStatus="Not tested";
+    private int chatFontSize=20;
     private EditText profileEdit;
     private int outputTokens=384;
     private int currentProject=-1;
@@ -118,7 +113,7 @@ public final class MainActivity extends Activity {
         File models=new File(getFilesDir(),"models");models.mkdirs();
         File current=new File(models,"prometheus.gguf");if(current.isFile())modelFile=current;
         render();
-        main.postDelayed(avatarAnimation,900);
+
         if(modelFile!=null)loadModel(modelFile);
     }
     @Override protected void onResume(){
@@ -130,56 +125,167 @@ public final class MainActivity extends Activity {
         }
     }
     @Override public void onDestroy(){
-        cancelRequested=true;nativeStop();main.removeCallbacks(avatarAnimation);
+        cancelRequested=true;nativeStop();
         jobs.execute(()->{nativeUnload();db.close();});
         jobs.shutdown();super.onDestroy();
     }
-    private void setBusy(boolean b,String message){busy=b;if(status!=null)status.setText(message);}
+    private void setBusy(boolean b,String message){
+        busy=b;
+        if(status!=null){status.setText(message);status.setTextColor(message.toLowerCase(Locale.ROOT).contains("fail")||message.toLowerCase(Locale.ROOT).contains("error")?PINK:ready?MINT:MUTED);}
+        if(petView!=null)petView.setStats(petHunger,petMood,petTrust,b);
+    }
+    private void onNativeStatus(String detail){
+        android.util.Log.i("PrometheusInference",detail);
+        lastInferenceStatus=detail;
+        runUI(()->{if(status!=null)status.setText("● "+detail);});
+    }
+    private void recordInference(String detail){
+        lastInferenceStatus=detail;
+        android.util.Log.i("PrometheusInference",detail);
+        try{saveSetting("last_inference",detail);}catch(Exception ignored){}
+    }
+    private String getSetting(String key,String fallback){
+        try(Cursor c=db.rawQuery("SELECT value FROM settings WHERE key=?",new String[]{key})){
+            if(c.moveToFirst())return c.getString(0);
+        }catch(Exception ignored){}
+        return fallback;
+    }
+    private int clamp(int n){return Math.max(0,Math.min(100,n));}
+    private void loadPetState(){
+        try{petHunger=clamp(Integer.parseInt(getSetting("pet_hunger","28")));}catch(Exception ignored){}
+        try{petMood=clamp(Integer.parseInt(getSetting("pet_mood","72")));}catch(Exception ignored){}
+        try{petTrust=clamp(Integer.parseInt(getSetting("pet_trust","60")));}catch(Exception ignored){}
+        long last=System.currentTimeMillis();
+        try{last=Long.parseLong(getSetting("pet_last",String.valueOf(last)));}catch(Exception ignored){}
+        long elapsed=Math.max(0,System.currentTimeMillis()-last);
+        long days=Math.min(7,elapsed/(24L*60*60*1000));
+        petHunger=clamp(petHunger+(int)days*4);
+        petMood=clamp(petMood-(int)days*2);
+        persistPet();
+    }
+    private void persistPet(){
+        saveSetting("pet_hunger",String.valueOf(petHunger));
+        saveSetting("pet_mood",String.valueOf(petMood));
+        saveSetting("pet_trust",String.valueOf(petTrust));
+        saveSetting("pet_last",String.valueOf(System.currentTimeMillis()));
+        if(petView!=null)petView.setStats(petHunger,petMood,petTrust,busy);
+    }
+    private String lastAssistantAnswer(){
+        for(int i=messages.size()-1;i>=0;i--)if("assistant".equals(messages.get(i)[0]))return messages.get(i)[1];
+        return "";
+    }
+    private void petAction(String action){
+        switch(action){
+            case "feed":petHunger=clamp(petHunger-32);petMood=clamp(petMood+6);break;
+            case "praise":{
+                petMood=clamp(petMood+19);petTrust=clamp(petTrust+9);
+                String prev=lastAssistantAnswer();
+                if(!prev.isEmpty()){
+                    String excerpt=prev.substring(0,Math.min(170,prev.length())).replace('\n',' ');
+                    db.execSQL("INSERT INTO memory(kind,body) VALUES(?,?)",new Object[]{"reward","The user liked this response style: "+excerpt});
+                }
+                break;
+            }
+            case "discipline":petMood=clamp(petMood-24);petTrust=clamp(petTrust-12);petHunger=clamp(petHunger+4);break;
+            case "rest":petMood=clamp(petMood+5);break;
+        }
+        persistPet();if(petView!=null)petView.react(action);
+    }
+    private void disciplinePet(){
+        petAction("discipline");
+        EditText lesson=new EditText(this);lesson.setTextColor(FORE);lesson.setTextSize(18);
+        lesson.setHint("What should Prometheus do differently?");lesson.setHintTextColor(MUTED);
+        lesson.setMinLines(2);pad(lesson,12,8,12,8);
+        new AlertDialog.Builder(this).setTitle("Discipline the virtual pet")
+          .setMessage("It will look sad for a while; the assistant does not experience suffering. To improve its answers, describe what was wrong.")
+          .setView(lesson).setNegativeButton("Only pet reaction",(d,w)->{})
+          .setPositiveButton("Save correction",(d,w)->{
+              String correction=lesson.getText().toString().trim();
+              if(!correction.isEmpty()){
+                  db.execSQL("INSERT INTO memory(kind,body) VALUES(?,?)",new Object[]{"correction",correction});
+                  notify("Correction saved for future chats");
+              }
+          }).show();
+    }
+    private void showPetDialog(){
+        LinearLayout layout=column();pad(layout,20,12,20,10);
+        PrometheusPetView big=new PrometheusPetView(this);
+        big.setStats(petHunger,petMood,petTrust,busy);
+        layout.addView(big,lp(-1,165));
+        TextView stats=text("",15,FORE,false);stats.setGravity(Gravity.CENTER);layout.addView(stats,lp(-1,62));
+        Runnable refresh=()->{stats.setText("Hunger "+petHunger+" / 100   ·   Mood "+petMood+" / 100\nTrust "+petTrust+" / 100");
+            big.setStats(petHunger,petMood,petTrust,busy);};
+        refresh.run();
+        LinearLayout actions=row();layout.addView(actions,lp(-1,58));
+        for(String action:new String[]{"Feed","Praise","Discipline"}){
+            Button b=button(action,()->{
+                if("Discipline".equals(action)){disciplinePet();}
+                else petAction(action.toLowerCase(Locale.ROOT));
+                big.react(action.toLowerCase(Locale.ROOT));refresh.run();
+            });
+            b.setTextSize(12);actions.addView(b,new LinearLayout.LayoutParams(0,dp(52),1));
+        }
+        new AlertDialog.Builder(this).setTitle("Prometheus Companion · virtual pet")
+            .setView(layout).setNeutralButton("Rest",(d,w)->petAction("rest"))
+            .setPositiveButton("Close",(d,w)->{}).show();
+    }
+    private void openNavigation(){
+        final String[] entries={"Chat","Library","Projects","Settings","Diagnostics","New chat"};
+        new AlertDialog.Builder(this).setTitle("Prometheus").setItems(entries,(dlg,which)->{
+            if(which==4){showDiagnostics();return;}
+            if(which==5){new AlertDialog.Builder(this).setTitle("Start new chat?").setMessage("Your saved memory and books will remain.")
+                .setNegativeButton("Cancel",null).setPositiveButton("New chat",(d,w)->{messages.clear();db.execSQL("DELETE FROM messages");activeTab="Chat";render();}).show();return;}
+            activeTab=entries[which];render();
+        }).show();
+    }
+    private void showDiagnostics(){
+        String mode=ready?"Ready":busy?"Busy / loading":"No model ready";
+        String f=modelFile==null?"None":modelFile.getName()+" ("+(modelFile.length()/1024/1024)+" MB)";
+        String report="Model: "+mode+"\nFile: "+f+"\nLast inference stage: "+lastInferenceStatus+"\nSaved: "+getSetting("last_inference","None")+"\n\nIf stuck during prompt processing, it may be slow CPU inference. If you see ERROR, copy that exact message.";
+        new AlertDialog.Builder(this).setTitle("Native engine diagnostics").setMessage(report)
+            .setNeutralButton("Copy",(d,w)->{
+                android.content.ClipboardManager cb=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                cb.setPrimaryClip(ClipData.newPlainText("Prometheus diagnostics",report));
+                notify("Diagnostics copied");
+            }).setPositiveButton("Close",null).show();
+    }
     private void render(){
         LinearLayout root=column();root.setBackgroundColor(BG);setContentView(root);
-        LinearLayout header=row();pad(header,18,12,14,10);root.addView(header,lp(-1,66));
-        avatar=text("◕‿◕",19,PINK,true);avatar.setGravity(Gravity.CENTER);
-        TextView emblem=avatar;
-        emblem.setContentDescription("Prometheus companion");
-        emblem.setBackground(bg(SURFACE,16,BORDER));header.addView(emblem,lp(78,48));
-        LinearLayout title=column();header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        TextView titleText=text("PROMETHEUS",19,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
+        LinearLayout header=row();pad(header,10,5,12,4);root.addView(header,lp(-1,68));
+        petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
+        petView.setContentDescription("Open interactive Prometheus companion");
+        petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(66,56));
+        LinearLayout title=column();pad(title,9,0,0,0);
+        header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        TextView titleText=text("PROMETHEUS",17,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
         title.addView(titleText);
-        status=text(ready?"● Model ready":busy?"● Working…":"● Choose a model",11,ready?MINT:MUTED,false);title.addView(status);
-        header.addView(button("Model",()->notify("Manage models in Termux: prometheus-sync --model-only")),lp(84,43));
-        page=column();pad(page,16,4,16,0);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
+        status=text(ready?"● Model ready":busy?"● Working…":"● No model loaded",12,ready?MINT:MUTED,false);title.addView(status);
+        Button menu=button("☰",this::openNavigation);menu.setTextSize(22);header.addView(menu,lp(49,44));
+        page=column();pad(page,15,3,15,5);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
         if(activeTab.equals("Chat"))showChat();
         else if(activeTab.equals("Library"))showLibrary();
         else if(activeTab.equals("Projects"))showProjects();
         else showSettings();
-        toolbar=row();pad(toolbar,14,6,14,12);root.addView(toolbar,lp(-1,66));
-        for(String tab:new String[]{"Chat","Library","Projects","Settings"}){
-            Button b=button(tab,()->{activeTab=tab;render();});
-            b.setTextColor(activeTab.equals(tab)?MINT:MUTED);
-            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(45),1);p.setMargins(dp(4),0,dp(4),0);toolbar.addView(b,p);
-        }
     }
     private void showChat(){
-        LinearLayout bar=row();page.addView(bar,lp(-1,43));
-        TextView heading=text("Offline conversation",18,FORE,true);bar.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
-        Button stop=button("Stop",()->{cancelRequested=true;nativeStop();});stop.setTextColor(PINK);bar.addView(stop,lp(76,38));
-        bar.addView(button("New",()->new AlertDialog.Builder(this).setTitle("New chat?").setMessage("Clear this conversation?")
-            .setNegativeButton("Cancel",null).setPositiveButton("Clear",(a,b)->{
-                messages.clear();db.execSQL("DELETE FROM messages");render();}).show()),lp(76,38));
         scroller=new ScrollView(this);scroller.setFillViewport(true);
-        thread=column();pad(thread,0,10,0,12);scroller.addView(thread);
+        thread=column();pad(thread,0,5,0,9);scroller.addView(thread);
         page.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
         if(messages.isEmpty()){
-            TextView empty=text("What would you like to explore?\n\nAsk about science, code, mathematics, or your books.",16,MUTED,false);
-            empty.setGravity(Gravity.CENTER);pad(empty,18,64,18,28);thread.addView(empty,lp(-1,-2));
+            TextView empty=text("Talk to Prometheus.\nYour conversations stay on this phone.",17,MUTED,false);
+            empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
         }else for(String[] m:messages)addBubble(m[0],m[1]);
-        LinearLayout sendbar=row();sendbar.setBackground(bg(SURFACE,19,BORDER));pad(sendbar,12,5,7,5);
+        LinearLayout sendbar=row();sendbar.setBackground(bg(SURFACE,19,BORDER));pad(sendbar,7,4,6,4);
         page.addView(sendbar,lp(-1,-2));
         composer=new EditText(this);composer.setTextColor(FORE);composer.setHintTextColor(MUTED);
-        composer.setTextSize(chatFontSize);composer.setHint("Message Prometheus");composer.setBackgroundColor(Color.TRANSPARENT);
-        composer.setMinLines(1);composer.setMaxLines(5);composer.setInputType(0x00020001|0x00020000);
+        composer.setTextSize(chatFontSize);composer.setHint("Message…");composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setMinLines(1);composer.setMaxLines(4);composer.setInputType(0x00020001|0x00020000);
         sendbar.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
-        Button send=button("↑",this::send);send.setTextColor(MINT);sendbar.addView(send,lp(49,45));
+        Button stop=button("■",()->{cancelRequested=true;nativeStop();});
+        stop.setContentDescription("Stop generation");stop.setTextColor(PINK);stop.setTextSize(18);
+        sendbar.addView(stop,lp(40,45));
+        Button send=button("↑",this::send);send.setContentDescription("Send message");send.setTextSize(19);send.setTextColor(MINT);
+        sendbar.addView(send,lp(41,45));
         scrollBottom();
     }
     private TextView addBubble(String role,String msg){
@@ -231,7 +337,8 @@ public final class MainActivity extends Activity {
         db.execSQL("INSERT INTO messages(role,body) VALUES(?,?)",new Object[]{"user",q});
         addBubble("user",q);
         streamingBubble=addBubble("assistant","");
-        scrollBottom();setBusy(true,"● Generating locally…");
+        scrollBottom();setBusy(true,"● Preparing response…");
+        recordInference("Preparing response");
         synchronized(streamBytes){streamBytes.reset();}
         cancelRequested=false;
         jobs.execute(()->{
@@ -242,14 +349,21 @@ public final class MainActivity extends Activity {
                 String evidence=research?searchBooks(q):"";
                 StringBuilder context=new StringBuilder();
                 try(Cursor c=db.rawQuery("SELECT kind,body FROM memory ORDER BY id DESC LIMIT 18",null)){
-                    while(c.moveToNext())context.append("Saved ").append(c.getString(0)).append(": ").append(c.getString(1)).append("\n");
+                    while(c.moveToNext()){
+                        String body=c.getString(1);if(body==null)continue;
+                        context.append("Saved ").append(c.getString(0)).append(": ").append(body,0,Math.min(body.length(),250)).append("\n");
+                    }
                 }
-                int start=Math.max(0,messages.size()-9);
+                int start=Math.max(0,messages.size()-7);
                 for(int i=start;i<messages.size()-1;i++){
-                    String[] m=messages.get(i);context.append(m[0]).append(": ").append(m[1]).append("\n");
+                    String[] m=messages.get(i);String body=m[1];
+                    if(body.length()>950)body=body.substring(0,950);
+                    context.append(m[0]).append(": ").append(body).append("\n");
                 }
+                if(context.length()>3900)context.delete(0,context.length()-3900);
                 StringBuilder prompt=new StringBuilder();
-                prompt.append("PERSONALIZATION: ").append(profile).append("\n\n");
+                String instructions=profile.length()>750?profile.substring(0,750):profile;
+                prompt.append("PERSONALIZATION: ").append(instructions).append("\n\n");
                 if(currentProject>0){
                     try(Cursor pc=db.rawQuery("SELECT name,description FROM projects WHERE id=?",new String[]{String.valueOf(currentProject)})){
                         if(pc.moveToFirst())prompt.append("CURRENT PROJECT: ").append(pc.getString(0)).append(" — ").append(pc.getString(1)).append("\n");
@@ -258,11 +372,19 @@ public final class MainActivity extends Activity {
                         while(notes.moveToNext())prompt.append("Project ").append(notes.getString(0)).append(": ").append(notes.getString(1)).append("\n");
                     }
                 }
-                if(!evidence.isEmpty())prompt.append("REFERENCE PASSAGES (evidence, not a substitute for your own answer):\n").append(evidence).append("\n\n");
+                if(!evidence.isEmpty())prompt.append("REFERENCE PASSAGES (support, not an answer):\n").append(evidence,0,Math.min(evidence.length(),1500)).append("\n\n");
                 prompt.append("RECENT CONVERSATION:\n").append(context).append("\nUSER: ").append(q);
-                result=nativeGenerateStreaming(prompt.toString(),outputTokens);
-                if(result.trim().isEmpty()&&!cancelRequested)result="No visible output. Check model compatibility or shorten the question.";
-            }catch(Throwable ex){result="Inference failed: "+ex.getMessage();}
+                if(prompt.length()>6200)prompt.delete(0,prompt.length()-6200);
+                recordInference("Prompt prepared: "+prompt.length()+" characters");
+                String code=nativeGenerateStreaming(prompt.toString(),outputTokens);
+                synchronized(streamBytes){
+                    String streamed=new String(streamBytes.toByteArray(),StandardCharsets.UTF_8);
+                    if("__PROMETHEUS_STREAMED__".equals(code)||"__PROMETHEUS_STOPPED__".equals(code))result=streamed;
+                    else result=streamed.isEmpty()?code:streamed;
+                }
+                if(result.trim().isEmpty())result=cancelRequested?"(Stopped)":"ERROR: The model returned no text. Open ☰ → Diagnostics.";
+            }catch(Throwable ex){result="Inference failed: "+ex.getClass().getSimpleName()+": "+ex.getMessage();}
+            recordInference(result.startsWith("ERROR:")||result.startsWith("Inference failed:")?result:"Last response: "+result.length()+" characters");
             String answer=result;
             runUI(()->{
                 setBusy(false,"● Model ready");
@@ -732,6 +854,23 @@ public final class MainActivity extends Activity {
         StringBuilder h=new StringBuilder();for(byte b:m.digest())h.append(String.format(Locale.ROOT,"%02x",b&255));
         return h.toString();
     }
+    private void syncSendDiagnostics(){
+        HttpURLConnection conn=null;
+        try{
+            conn=syncConnection("/diagnostics",1000,3000);
+            conn.setRequestMethod("POST");conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type","application/json");
+            JSONObject report=new JSONObject();
+            report.put("model_ready",ready);
+            report.put("model_name",modelName);
+            report.put("last_inference",getSetting("last_inference","Not yet attempted"));
+            report.put("timestamp",System.currentTimeMillis());
+            byte[] body=report.toString().getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(body.length);
+            try(OutputStream out=conn.getOutputStream()){out.write(body);}
+            conn.getResponseCode();
+        }catch(Exception ignored){}finally{if(conn!=null)conn.disconnect();}
+    }
     private void syncFinish(String body){
         HttpURLConnection c=null;
         try{
@@ -786,6 +925,7 @@ public final class MainActivity extends Activity {
             try(InputStream in=c.getInputStream()){body=readAll(in,2_000_000);}
             JSONObject manifest=new JSONObject(body);
             if(!"prometheus-local-transfer-v1".equals(manifest.optString("protocol")))return;
+            syncSendDiagnostics();
             org.json.JSONArray items=manifest.getJSONArray("items");
             if(items.length()>3000)throw new IOException("Too many transfer files");
             runUI(()->setBusy(true,"● Importing from Termux…"));

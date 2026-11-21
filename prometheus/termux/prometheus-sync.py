@@ -140,7 +140,12 @@ def main():
     ap.add_argument('--include',action='append',default=[],metavar='BOOK_FOLDER',help='Extra book folder (repeatable)')
     ap.add_argument('--dry-run',action='store_true',help='Show what would be sent, without starting server')
     ap.add_argument('--status',action='store_true',help='Show available Termux model/book sources')
+    ap.add_argument('--diagnostics',action='store_true',help='Read last native APK diagnostic report; captured on sync')
     args=ap.parse_args()
+    if args.diagnostics:
+        diag=APP/'native-diagnostics.json'
+        print(diag.read_text(encoding='utf8') if diag.is_file() else 'No native diagnostics yet. Run prometheus-sync, open the APK, then retry this command.')
+        return 0
     send_model=not(args.books_only or args.memory_only)
     send_books=not(args.model_only or args.memory_only)
     send_memory=not(args.model_only or args.books_only)
@@ -148,7 +153,7 @@ def main():
         model=get_model(args.model)
         print('Selected abliterated model:',model or '(none found)')
         print('Termux library source files:',sum(1 for _ in scan_books(args.include)))
-        print('Native app ID: ai.prometheus.offline.termux; model is private to native app after sync')
+        print('Native app ID: ai.prometheus.offline.pet; model is private to native app after sync')
         return 0
     sources=[]
     if send_memory:
@@ -206,6 +211,16 @@ def main():
                 return
             self.send_error(404)
         def do_POST(self):
+            if urlparse(self.path).path=='/diagnostics':
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if size<=0 or size>8192:raise ValueError('Invalid diagnostics length')
+                    report=json.loads(self.rfile.read(size))
+                    APP.mkdir(parents=True,exist_ok=True)
+                    (APP/'native-diagnostics.json').write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf8')
+                    self.send_response(200);self.end_headers();self.wfile.write(b'ok')
+                except Exception:self.send_error(400)
+                return
             if urlparse(self.path).path!='/done':self.send_error(404);return
             try:
                 size=int(self.headers.get('Content-Length','0'))

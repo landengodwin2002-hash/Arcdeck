@@ -1,59 +1,31 @@
-# Prometheus Native v1.2 — Termux-managed setup, independent offline chat
+# Prometheus Companion v1.3 (native APK)
 
-**What is different:** All one-time model/library/memory setup is initiated from a Termux command, not Android document pickers. The native app uses the on-device GGUF with llama.cpp; Termux is **not** used for ongoing inference or chat.
+An offline Android ARM64 chatbot using a 4B abliterated GGUF in the app's own llama.cpp native library. Termux is used only to provision the native app's model and knowledge, not for chat.
 
-## Install
+## Changes in v1.3
 
-The new Android application ID is `ai.prometheus.offline.termux`, with display name **Prometheus Native**. It can be installed beside the previous test APK, which has a different debug signing key. This is a debug build intended for device verification, not a signed Play Store release.
+- Minimal chat-first Android UI. Header is a custom, animated original virtual-pet character; all other pages are in the menu. Text is larger, and the conversation has the available screen space.
+- Pet dialog provides **Feed**, **Praise**, **Discipline**, and **Rest**. Hunger, mood and trust persist in the Android app's SQLite settings. This is a simulated game; no model can literally suffer. Praise may save a positive example of the most recent assistant answer. Discipline may save a corrective instruction. These are prompt/memory updates, not model-weight training.
+- Native inference records sampled tokens using `llama_sampler_accept`, reports prompt-processing and generation stages, caps contexts to avoid overload, and retries a fallback template on zero-token output. UTF-8 streaming bytes are turned into the Java answer, avoiding `NewStringUTF` on arbitrary Unicode model output.
+- Optional **Diagnostics** screen provides useful model and error details; the Termux sync command can receive the most recent native diagnostic JSON.
 
-Install the APK through Android's system installer (Android still requires confirmation for sideloading). You can open the installer from Termux after putting the APK in Downloads: `termux-open ~/storage/downloads/Prometheus-Native-v1.2.apk`.
+## Installation (Termux-first)
 
-## Set up entirely from Termux
+1. Install the compiled `Prometheus-Companion-v1.3.apk`. Android will require installation approval when appropriate.
+2. Start Termux and install the sync command:
 
-Download the script `prometheus-sync.py`, then:
+   `curl -fsSL https://raw.githubusercontent.com/landengodwin2002-hash/Arcdeck/prometheus-native-app/prometheus/termux/prometheus-sync.py -o "$PREFIX/bin/prometheus-sync" && chmod +x "$PREFIX/bin/prometheus-sync"`
 
-```bash
-mkdir -p "$PREFIX/bin"
-cp ~/storage/downloads/prometheus-sync.py "$PREFIX/bin/prometheus-sync"
-chmod +x "$PREFIX/bin/prometheus-sync"
-prometheus-sync --dry-run
-prometheus-sync
-```
+3. Run `prometheus-sync` and **then open the installed Prometheus Companion app**. The app retrieves the already-installed abliterated 4B GGUF, saved chats, memory, project records, and books from a temporary local server in Termux. The Termux process exits once transfer is acknowledged.
+4. For a model-only retry use `prometheus-sync --model-only`; book-only `--books-only`; memory-only `--memory-only`.
+5. To inspect native diagnostics run `prometheus-sync --diagnostics` after a previous sync (to refresh diagnostics, start `prometheus-sync --memory-only`, open the app, then run diagnostics).
 
-Or install the script directly from its tracked GitHub branch:
-
-```bash
-curl -fL https://raw.githubusercontent.com/landengodwin2002-hash/Arcdeck/prometheus-native-app/prometheus/termux/prometheus-sync.py -o "$PREFIX/bin/prometheus-sync"
-chmod +x "$PREFIX/bin/prometheus-sync"
-prometheus-sync
-```
-
-**Leave that command running in Termux and simply open Prometheus Native on your phone.** The app checks `127.0.0.1:18765` on resume, verifies SHA-256 for every transferred file, archives imported books, and imports GGUF plus memory. The Termux sender stops after confirmation. It does not require you to choose a file, pair a server, or grant access to Termux's private directory from Android's file picker.
-
-This local handoff needs enough free storage to copy the ~2.7 GB model into the native app's private directory. Don't delete original files until a successful device test. The Termux model is never modified or moved.
-
-### Commands
-
-- `prometheus-sync` — model, books, memories, corrections, projects, chat history
-- `prometheus-sync --model-only` — existing abliterated/obliterated GGUF
-- `prometheus-sync --books-only` — discovered PDFs/EPUB/DOCX/ODT/TXT/MD/FB2/RTF
-- `prometheus-sync --memory-only` — export current Termux databases and imported text passages
-- `prometheus-sync --include ~/storage/downloads/OtherBooks` — add a specific book folder
-- `prometheus-sync --dry-run` — preview fingerprints and sizes, no sender
-- `prometheus-sync --status` — show selected Termux model and number of eligible book files
-
-The importer searches the existing archived library (`~/local-ai/knowledge/originals` and `downloaded`), dedicated book folders, Documents, and root-level Downloads with extension and directory filtering. It does not intentionally crawl game textures or programming assets. Scanned PDFs still need OCR.
-
-## The setup workflow is **not** a permanent server
-
-The only HTTP traffic is temporary *on-device* file transfer over loopback, while you explicitly run `prometheus-sync` in Termux. No public network or cloud service is involved. Chat is subsequently fully native/offline and the Termux sender exits.
-
-**Privacy limitation:** Android's localhost networking is shared between apps. While the transfer server is running, another app on the device with networking permission could attempt to read a model or book from that local port. Use the command only while actively importing, avoid sensitive files if you distrust other installed apps, and stop it when done. This preview does not provide cryptographic app-to-app identity authentication. No API keys or network ports are opened beyond the temporary loopback sender.
+**Important:** The app has a new package ID, `ai.prometheus.offline.pet`. It installs beside the previous debug-signed v1.2 because the earlier CI debug signing certificate is not suitable for authenticated seamless updates. Nothing in the old v1.2 app or Termux is removed. This is a debug/test APK; production releases need stable private-key signing.
 
 ## Known limitations
 
-- The native model engine is CPU-backed, so the 4B model can be slow or exceed RAM on a given device.
-- Offline technical textbook packs are not shipped within the APK; the sync imports those already stored in your Termux collection. If you want more, first add them through Termux library tools then sync.
-- Not all previous requests (OCR, advanced semantic search, autonomous self-edit review, extended tool execution) are complete.
-- Native Android user acceptance testing and performance measurements on the Motorola Edge 2024 are still required.
-- Future native APK updates need stable private signing. This preview uses a new app ID to avoid breaking existing test installation data.
+- Native model generation has not been verified with the actual user's GGUF on the target Android phone. A successful GitHub compilation verifies the APK structure, **not** that it will answer questions.
+- CPU-only 4B inference may take considerable time on a phone, especially before the first token. The UI now shows the current stage and errors without silently finishing.
+- No remote/cloud connection is needed to chat. A temporary localhost Termux server is used only for import, and is not cryptographically authenticated. Only start it while transferring files.
+- Recognition of scanned PDFs still needs OCR; advanced retrieval remains keyword-based; direct app self-modification and advanced tools are not yet implemented.
+- Pet feedback is persistent contextual preference data, not neural-weight fine-tuning. Its displayed happiness or distress is fictional.
