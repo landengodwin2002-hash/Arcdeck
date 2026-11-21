@@ -30,7 +30,7 @@ jobs:
       - name: Unpack Prometheus source and verify
         run: |
           base64 --decode prometheus/project.tar.gz.b64 > source.tar.gz
-          echo "a406a5155a6ea77b7aadb15ec80948c68d8cfcdbe9e0f876ac612990078f4501  source.tar.gz" | sha256sum --check
+          echo "5d1abe57d7e7a54681b5de088c3ae769e18e3378d104366a39e6a666c22fc9b9  source.tar.gz" | sha256sum --check
           tar -xzf source.tar.gz
           mv Prometheus prometheus-build
       - name: Assemble Android debug APK
