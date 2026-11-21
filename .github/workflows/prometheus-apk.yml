@@ -17,8 +17,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK
+      - name: Install Android platform
         run: |
           yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' || true
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
