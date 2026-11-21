@@ -40,7 +40,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService jobs=Executors.newSingleThreadExecutor();
     private final ExecutorService syncJobs=Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicInteger foregroundOps=new java.util.concurrent.atomic.AtomicInteger(0);
-    private static volatile boolean sharedModelReady=false, sharedGenerating=false;
+    private static volatile boolean sharedModelReady=false, sharedGenerating=false, sharedModelLoading=false;
     private static volatile String sharedModelPath="";
     private long lastRenderedId=0, lastPartialSave=0;
     private final Runnable chatWatcher=new Runnable(){
@@ -161,6 +161,7 @@ public final class MainActivity extends Activity {
         if(queuedPrompt.isEmpty())queuedPrompt=null;
         lastRenderedId=lastMessageId();
         render();
+        if(ready && queuedPrompt!=null)main.postDelayed(this::deliverQueuedPrompt,400);
 
         if(modelFile!=null && !ready)loadModel(modelFile);
     }
@@ -541,9 +542,12 @@ public final class MainActivity extends Activity {
         page.addView(help);
     }
     private void updateBookCount(){if(bookCount==null)return;
-        try(Cursor c=db.rawQuery("SELECT COUNT(DISTINCT book) FROM passages",null)){
-            if(c.moveToFirst())bookCount.setText(c.getInt(0)+" books indexed");
+        int archived=0,sources=0,passages=0;
+        try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM book_files",null)){if(c.moveToFirst())archived=c.getInt(0);}
+        try(Cursor c=db.rawQuery("SELECT COUNT(DISTINCT book),COUNT(*) FROM passages",null)){
+            if(c.moveToFirst()){sources=c.getInt(0);passages=c.getInt(1);}
         }
+        bookCount.setText(archived+" archived originals · "+sources+" searchable sources\n"+passages+" searchable passages (including imported Termux knowledge)");
     }
     private void selectBooks(){
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");
@@ -654,11 +658,12 @@ public final class MainActivity extends Activity {
         jobs.execute(()->{try{loadModelOnWorker(f);}finally{foregroundEnd();}});
     }
     private void loadModelOnWorker(File f){
+        sharedModelLoading=true;
         runUI(()->setBusy(true,"● Loading on-device model…"));
         String err;
         try{err=nativeLoad(f.getAbsolutePath());}catch(Throwable ex){err=ex.toString();}
         boolean ok="OK".equals(err);
-        sharedModelReady=ok;sharedModelPath=ok?f.getAbsolutePath():"";
+        sharedModelReady=ok;sharedModelLoading=false;sharedModelPath=ok?f.getAbsolutePath():"";
         final String errorMessage=err;
         runUI(()->{ready=ok;modelFile=ok?f:null;modelName=ok?f.getName():"No model";
             setBusy(false,ok?"● Model ready":"● Model failed to load");
@@ -1056,7 +1061,7 @@ public final class MainActivity extends Activity {
         }finally{if(c!=null)c.disconnect();if(partial.exists())partial.delete();}
     }
     private void syncFromTermuxIfAvailable(){
-        HttpURLConnection c=null;
+        HttpURLConnection c=null;boolean foregroundHeld=false;
         try{
             c=syncConnection("/manifest",1100,2500);
             if(c.getResponseCode()!=200)return;
@@ -1064,10 +1069,11 @@ public final class MainActivity extends Activity {
             try(InputStream in=c.getInputStream()){body=readAll(in,2_000_000);}
             JSONObject manifest=new JSONObject(body);
             if(!"prometheus-local-transfer-v1".equals(manifest.optString("protocol")))return;
+            foregroundBegin("Importing model and knowledge from Termux");foregroundHeld=true;
             syncSendDiagnostics();
             org.json.JSONArray items=manifest.getJSONArray("items");
             if(items.length()>3000)throw new IOException("Too many transfer files");
-            runUI(()->{if(!ready && !busy)setBusy(true,"● Importing model from Termux…");});
+            runUI(()->{if(status!=null)status.setText("● Termux sync active — model and books are being checked");});
             int books=0,memories=0,models=0,failures=0;
             for(int i=0;i<items.length();i++){
                 JSONObject item=items.getJSONObject(i);
@@ -1084,13 +1090,13 @@ public final class MainActivity extends Activity {
                         String expected=item.getString("sha256");
                         if(target.isFile() && target.length()==item.getLong("size") && sha256(target).equals(expected)){
                             models++;
-                            if(!ready)loadModelOnWorker(target);
+                            if(!ready && !sharedModelLoading)loadModelOnWorker(target);
                             continue;
                         }
                         File staging=new File(new File(getFilesDir(),"models"),"sync-abliterated.gguf");
                         syncTransfer(item,staging);verifyGGUF(staging);
                         // Safely stop old model before replacing the active GGUF.
-                        nativeUnload();ready=false;
+                        nativeUnload();ready=false;sharedModelReady=false;sharedModelPath="";
                         if(target.exists()&&!target.delete())throw new IOException("Cannot replace previous GGUF");
                         if(!staging.renameTo(target))throw new IOException("Cannot activate abliterated GGUF");
                         getPreferences(MODE_PRIVATE).edit().putString("model_label",filename).apply();
@@ -1105,10 +1111,12 @@ public final class MainActivity extends Activity {
                     }else if("book".equals(kind)){
                         if(!lower.matches("(?s).*\\.(pdf|epub|docx|odt|txt|md|fb2|rtf)$") || item.getLong("size")>256L*1024*1024)
                             throw new IOException("Unsupported book format or size");
-                        File stage=new File(getCacheDir(),"prometheus-sync-"+item.getString("id")+"-"+filename);
+                        File stageDir=new File(getCacheDir(),"book-sync-"+item.getString("id"));
+                        if(!stageDir.exists()&&!stageDir.mkdirs())throw new IOException("Cannot create book staging directory");
+                        File stage=new File(stageDir,filename);
                         syncTransfer(item,stage);
                         try{indexBook(Uri.fromFile(stage));books++;}
-                        finally{stage.delete();}
+                        finally{stage.delete();stageDir.delete();}
                     }
                 }catch(Exception e){failures++;android.util.Log.e("PrometheusSync","Item skipped: "+filename,e);}
             }
@@ -1134,14 +1142,15 @@ public final class MainActivity extends Activity {
             }
             final int restoredBooks=books,restoredModels=models,restoredMem=memories,errors=failures;
             syncFinish("{\"success\":true,\"models\":"+models+",\"books\":"+books+",\"migrations\":"+memories+",\"errors\":"+failures+"}");
-            runUI(()->{updateBookCount();if(!busy)setBusy(false,ready?"● Model ready":"● Preparing model…");
+            runUI(()->{updateBookCount();if(!sharedGenerating && !sharedModelLoading)setBusy(false,ready?"● Model ready":"● Preparing model…");
                 Toast.makeText(this,"Termux sync: "+restoredModels+" model, "+restoredBooks+" books, "+restoredMem+" migration; "+errors+" errors",Toast.LENGTH_LONG).show();});
             File model=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
-            if(model.isFile() && !ready)loadModelOnWorker(model);
+            if(model.isFile() && !ready && !sharedModelLoading)loadModelOnWorker(model);
+            syncSendDiagnostics();
         }catch(java.net.ConnectException ignored){/* No sender: ordinary offline chat, no delay. */}
         catch(Exception e){android.util.Log.e("PrometheusSync","Local transfer failed",e);
             final String error=e.getMessage();syncFinish("{\"success\":false,\"message\":"+JSONObject.quote(error==null?"Unknown":error)+"}");
             runUI(()->{setBusy(false,ready?"● Model ready":"● Termux sync error");notify("Termux setup: "+error);});
-        }finally{if(c!=null)c.disconnect();}
+        }finally{if(c!=null)c.disconnect();if(foregroundHeld)foregroundEnd();}
     }
 }
