@@ -10,6 +10,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.provider.OpenableColumns;
+import android.provider.DocumentsContract;
 import android.text.Html;
 import android.view.*;
 import android.view.inputmethod.InputMethodManager;
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.zip.*;
+import org.json.JSONObject;
 
 public final class MainActivity extends Activity {
     static { System.loadLibrary("prometheus"); }
@@ -34,7 +36,7 @@ public final class MainActivity extends Activity {
     private static final int BG=0xff101827, SURFACE=0xff202940, MINT=0xff96e5ff, PINK=0xffffa6de,
             FORE=0xfff6f7ff, MUTED=0xffacbad3, BORDER=0xff48526c, USER=0xff293954;
     private static final String MODEL_URL="https://huggingface.co/mradermacher/Huihui-Qwen3.5-4B-abliterated-GGUF/resolve/main/Huihui-Qwen3.5-4B-abliterated.Q4_K_M.gguf?download=true";
-    private static final int PICK_MODEL=51,PICK_BOOKS=52,PICK_PROJECT_FILE=53;
+    private static final int PICK_MODEL=51,PICK_BOOKS=52,PICK_PROJECT_FILE=53,PICK_MIGRATION=54,PICK_BOOK_FOLDER=55;
     private final ExecutorService jobs=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ArrayList<String[]> messages=new ArrayList<>();
@@ -87,6 +89,7 @@ public final class MainActivity extends Activity {
         db.execSQL("CREATE TABLE IF NOT EXISTS project_items(id INTEGER PRIMARY KEY, project_id INTEGER, kind TEXT, body TEXT, done INTEGER DEFAULT 0, created INTEGER)");
         db.execSQL("CREATE TABLE IF NOT EXISTS book_files(id INTEGER PRIMARY KEY, title TEXT, sha256 TEXT UNIQUE, path TEXT, indexed_at INTEGER)");
         db.execSQL("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS imported_migrations(sha256 TEXT PRIMARY KEY, imported INTEGER)");
         try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='profile'",null)){
             if(settings.moveToFirst())profile=settings.getString(0);
         }
@@ -96,7 +99,7 @@ public final class MainActivity extends Activity {
         try(Cursor settings=db.rawQuery("SELECT value FROM settings WHERE key='current_project'",null)){
             if(settings.moveToFirst())currentProject=Integer.parseInt(settings.getString(0));
         }
-        try(Cursor c=db.rawQuery("SELECT role,body FROM messages ORDER BY id LIMIT 100",null)){
+        try(Cursor c=db.rawQuery("SELECT role,body FROM (SELECT id,role,body FROM messages ORDER BY id DESC LIMIT 100) ORDER BY id ASC",null)){
             while(c.moveToNext()) messages.add(new String[]{c.getString(0),c.getString(1)});
         }
         File models=new File(getFilesDir(),"models");models.mkdirs();
@@ -265,6 +268,11 @@ public final class MainActivity extends Activity {
         TextView desc=text("Import books once, then ask questions across multiple sources in Chat. Files stay on your phone.",14,MUTED,false);
         pad(desc,0,9,0,16);page.addView(desc);
         page.addView(button("＋ Import books (PDF, EPUB, DOCX, TXT)",this::selectBooks),lp(-1,52));
+        page.addView(button("⊞ Import entire book folder",()->{
+            Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            startActivityForResult(i,PICK_BOOK_FOLDER);
+        }),lp(-1,52));
         bookCount=text("",14,MINT,false);pad(bookCount,5,17,0,15);page.addView(bookCount);
         updateBookCount();
         TextView help=text("Imported originals are archived privately on this phone. The app uses relevant passages to answer practical questions, not to replace conversation. Scanned PDFs still require OCR.",14,MUTED,false);
@@ -295,6 +303,8 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request,result,data);
         if(result!=RESULT_OK || data==null)return;
         if(request==PICK_MODEL && data.getData()!=null)importModel(data.getData());
+        if(request==PICK_MIGRATION && data.getData()!=null)importMigration(data.getData());
+        if(request==PICK_BOOK_FOLDER && data.getData()!=null)importBookFolder(data.getData());
         if(request==PICK_BOOKS){
             ArrayList<Uri> list=new ArrayList<>();
             if(data.getClipData()!=null) for(int i=0;i<data.getClipData().getItemCount();i++)list.add(data.getClipData().getItemAt(i).getUri());
@@ -381,9 +391,10 @@ public final class MainActivity extends Activity {
         String err;
         try{err=nativeLoad(f.getAbsolutePath());}catch(Throwable ex){err=ex.toString();}
         boolean ok="OK".equals(err);
+        final String errorMessage=err;
         runUI(()->{ready=ok;modelFile=ok?f:null;modelName=ok?f.getName():"No model";
             setBusy(false,ok?"● Model ready":"● Model failed to load");
-            if(!ok)new AlertDialog.Builder(this).setTitle("Model loading failed").setMessage(err).setPositiveButton("Choose model",(d,w)->modelDialog()).setNegativeButton("Close",null).show();
+            if(!ok)new AlertDialog.Builder(this).setTitle("Model loading failed").setMessage(errorMessage).setPositiveButton("Choose model",(d,w)->modelDialog()).setNegativeButton("Close",null).show();
         });
     }
     private String readAll(InputStream in,int cap)throws IOException{
@@ -437,7 +448,7 @@ public final class MainActivity extends Activity {
             if(stream==null)throw new IOException("Cannot access "+file);
             switch(ext){
                 case "pdf": try(PDDocument document=PDDocument.load(stream)){
-                    PDFTextStripper stripper=new PDFTextStripper();stripper.setEndPage(Math.min(200,document.getNumberOfPages()));
+                    PDFTextStripper stripper=new PDFTextStripper();stripper.setEndPage(document.getNumberOfPages());
                     extracted=stripper.getText(document);
                 }break;
                 case "epub":case "docx":case "odt":extracted=zipText(stream,ext);break;
@@ -549,6 +560,122 @@ public final class MainActivity extends Activity {
         content.addView(text("Active model",17,MINT,true));
         content.addView(text(modelName,15,FORE,false));
         content.addView(button("Choose abliterated GGUF",this::modelDialog),lp(-1,49));
+        content.addView(text("Existing Termux books and memories",17,MINT,true));
+        content.addView(button("Import Termux migration",()->{
+            Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(i,PICK_MIGRATION);
+        }),lp(-1,49));
         content.addView(text("Offline runtime: llama.cpp in this APK. No local HTTP server, pairing or Termux needed after importing your GGUF.",14,MUTED,false));
+    }
+
+    private void importMigration(Uri uri){
+        setBusy(true,"● Restoring Termux knowledge…");
+        jobs.execute(()->{
+            File tmp=null;int imported=0;
+            try{
+                tmp=File.createTempFile("prometheus-migration-",".jsonl",getCacheDir());
+                java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
+                try(InputStream in=getContentResolver().openInputStream(uri); FileOutputStream out=new FileOutputStream(tmp)){
+                    if(in==null)throw new IOException("Cannot open migration file");
+                    byte[] buf=new byte[65536];int n;long bytes=0;
+                    while((n=in.read(buf))!=-1){bytes+=n;if(bytes>1024L*1024*1024)throw new IOException("Migration exceeds 1 GB");
+                        sha.update(buf,0,n);out.write(buf,0,n);}
+                }
+                StringBuilder h=new StringBuilder();for(byte b:sha.digest())h.append(String.format(Locale.ROOT,"%02x",b&255));
+                String hash=h.toString();
+                try(Cursor c=db.rawQuery("SELECT 1 FROM imported_migrations WHERE sha256=?",new String[]{hash})){
+                    if(c.moveToFirst())throw new IOException("This migration file is already imported");
+                }
+                db.beginTransaction();
+                try(BufferedReader br=new BufferedReader(new InputStreamReader(new FileInputStream(tmp),StandardCharsets.UTF_8),32768)){
+                    String line;
+                    while((line=br.readLine())!=null){
+                        if(line.length()>1000000)throw new IOException("Migration line too long");
+                        if(line.isEmpty())continue;
+                        JSONObject o=new JSONObject(line);String type=o.optString("type","");
+                        switch(type){
+                            case "message":{
+                                String role=o.optString("role","");String body=o.optString("body","");
+                                if((role.equals("user")||role.equals("assistant"))&&!body.isEmpty()){
+                                    db.execSQL("INSERT INTO messages(role,body) VALUES(?,?)",new Object[]{role,body});imported++;}
+                                break;
+                            }
+                            case "memory":{
+                                String body=o.optString("body","");
+                                if(!body.isEmpty()){db.execSQL("INSERT INTO memory(kind,body) VALUES(?,?)",
+                                    new Object[]{o.optString("kind","fact"),body});imported++;}
+                                break;
+                            }
+                            case "passage":{
+                                String title=o.optString("book","Imported book"),body=o.optString("body","");
+                                if(!body.isEmpty()){db.execSQL("INSERT INTO passages(book,body) VALUES(?,?)",new Object[]{title,body});imported++;}
+                                break;
+                            }
+                            case "project":{
+                                String name=o.optString("name","");
+                                if(!name.isEmpty()){db.execSQL("INSERT OR IGNORE INTO projects(name,description,created) VALUES(?,?,?)",
+                                    new Object[]{name,o.optString("description",""),System.currentTimeMillis()});imported++;}
+                                break;
+                            }
+                            case "project_item":{
+                                String name=o.optString("project",""),body=o.optString("body","");
+                                if(name.isEmpty()||body.isEmpty())break;
+                                try(Cursor pc=db.rawQuery("SELECT id FROM projects WHERE name=?",new String[]{name})){
+                                    if(pc.moveToFirst()){
+                                        db.execSQL("INSERT INTO project_items(project_id,kind,body,done,created) VALUES(?,?,?,?,?)",
+                                            new Object[]{pc.getInt(0),o.optString("kind","note"),body,o.optInt("done",0),System.currentTimeMillis()});imported++;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    db.execSQL("INSERT INTO imported_migrations(sha256,imported) VALUES(?,?)",new Object[]{hash,System.currentTimeMillis()});
+                    db.setTransactionSuccessful();
+                }finally{db.endTransaction();}
+                final int count=imported;
+                runUI(()->{messages.clear();
+                    try(Cursor c=db.rawQuery("SELECT role,body FROM (SELECT id,role,body FROM messages ORDER BY id DESC LIMIT 100) ORDER BY id ASC",null)){
+                        while(c.moveToNext())messages.add(new String[]{c.getString(0),c.getString(1)});
+                    }
+                    setBusy(false,ready?"● Model ready":"● Choose a model");render();
+                    notify("Restored "+count+" knowledge and chat records");});
+            }catch(Exception ex){String err=ex.getMessage();runUI(()->{setBusy(false,"● Migration failed");notify("Migration: "+err);});}
+            finally{if(tmp!=null)tmp.delete();}
+        });
+    }
+
+    private void importBookFolder(Uri treeUri){
+        setBusy(true,"● Importing selected book folder…");
+        jobs.execute(()->{
+            int scanned=0,done=0,failed=0;
+            try{
+                Deque<String> folders=new ArrayDeque<>();
+                folders.add(DocumentsContract.getTreeDocumentId(treeUri));
+                while(!folders.isEmpty() && scanned<4000){
+                    String parent=folders.removeFirst();
+                    Uri childUri=DocumentsContract.buildChildDocumentsUriUsingTree(treeUri,parent);
+                    try(Cursor children=getContentResolver().query(childUri,
+                        new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null)){
+                        if(children==null)continue;
+                        while(children.moveToNext() && scanned<4000){
+                            scanned++;String id=children.getString(0),name=children.getString(1),mime=children.getString(2);
+                            if(DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)){
+                                if(folders.size()<1000)folders.addLast(id);
+                                continue;
+                            }
+                            String lower=name==null?"":name.toLowerCase(Locale.ROOT);
+                            if(!lower.matches("(?s).*\\.(pdf|epub|docx|odt|txt|md|fb2|rtf)$"))continue;
+                            try{indexBook(DocumentsContract.buildDocumentUriUsingTree(treeUri,id));done++;}
+                            catch(Exception ignored){failed++;}
+                        }
+                    }
+                }
+            }catch(Exception ex){String err=ex.getMessage();runUI(()->notify("Folder scan failed: "+err));}
+            final int ok=done,failedCount=failed,examined=scanned;
+            runUI(()->{setBusy(false,ready?"● Model ready":"● Choose model");updateBookCount();
+                notify("Archived and indexed "+ok+" books from "+examined+" files; "+failedCount+" need attention");});
+        });
     }
 }

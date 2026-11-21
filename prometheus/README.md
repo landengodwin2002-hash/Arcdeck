@@ -8,13 +8,13 @@ This is a **native Android application**, not the Termux-backed website or a PWA
 - Streaming chat and Stop control; 192/384/640 response-length settings.
 - Large terminal-inspired blue-and-pink Android UI; companion face and Chat, Library, Projects, Settings tabs.
 - Persistent local SQLite chats, memory (`/remember`), behavioral corrections (`/correct`), profile, projects, tasks and notes (`/project ...`).
-- Source-based book retrieval when relevant; supports PDF text, EPUB, ODT, DOCX, TXT and selected text file formats. Original imported books are copied into the app's private archive and indexed, excluding XML/JSON texture noise.
+- Source-based book retrieval when relevant; supports PDF text, EPUB, ODT, DOCX, TXT and selected text file formats. Original imported books are copied into the app's private archive and indexed, excluding XML/JSON texture noise. You can select multiple files or an entire book folder (Android document tree picker).
 - No implicit self-modifying autonomous code; any future code edits must be explicitly proposed and reviewed.
 
 ## Important gaps
 
-- **Existing Termux SQLite data is not yet imported into this native app automatically.** It remains intact in Termux and the migration backup. A format conversion/import flow must be added.
-- OCR for scanned PDFs, semantic embedding retrieval, bulk folder-collection download, self-modification with review UI, advanced tooling for electronics/chemistry and broad phone/Termux control are not yet implemented.
+- **Existing Termux data migration is available via export/import, not automatic.** From Termux run `python export-termux-for-native.py` (script included in this source package), then in native Prometheus choose **Settings → Import Termux migration** and select `Downloads/Prometheus-Native-Migration.jsonl`. It imports chats, corrections, memories, project items, and indexed book passages. Original book files must still be imported separately into the app. The migration file contains private chat information; keep it local.
+- OCR for scanned PDFs, semantic embedding retrieval, automatic internet downloads of whole subject collections, self-modification with review UI, advanced tools for electronics/chemistry, and broad phone/Termux control are not yet implemented.
 - Only CPU-based native GGUF is configured. It can be slow. Performance and Android memory-pressure handling require device tests.
 - The companion face currently changes only between states by label; complex animations are not yet included.
 - An APK produced by CI is a *debug test build*, not a signed production release.
