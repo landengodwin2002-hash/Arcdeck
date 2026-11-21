@@ -88,9 +88,11 @@ public final class MainActivity extends Activity {
     private String lastInferenceStatus="Not tested";
     private int chatFontSize=20;
     private EditText profileEdit;
-    private int outputTokens=384;
+    private int outputTokens=192;
     private int currentProject=-1;
     private boolean ready=false,busy=false;
+    private long inferenceStartedAt=0L;
+    private String latestStage="Idle";
     private String queuedPrompt=null;
     private volatile boolean cancelRequested=false;
     private TextView streamingBubble;
@@ -207,6 +209,7 @@ public final class MainActivity extends Activity {
     }
     private void setBusy(boolean b,String message){
         busy=b;
+        if(message!=null)latestStage=message;
         if(status!=null){status.setText(message);status.setTextColor(message.toLowerCase(Locale.ROOT).contains("fail")||message.toLowerCase(Locale.ROOT).contains("error")?PINK:ready?MINT:MUTED);}
         if(petView!=null)petView.setStats(petHunger,petMood,petTrust,b);
     }
@@ -218,7 +221,7 @@ public final class MainActivity extends Activity {
         runUI(()->{if(status!=null)status.setText("● "+detail);});
     }
     private void recordInference(String detail){
-        lastInferenceStatus=detail;
+        lastInferenceStatus=detail;latestStage=detail;
         android.util.Log.i("PrometheusInference",detail);
         try{saveSetting("last_inference",detail);}catch(Exception ignored){}
     }
@@ -319,7 +322,7 @@ public final class MainActivity extends Activity {
     private void showDiagnostics(){
         String mode=ready?"Ready":busy?"Busy / loading":"No model ready";
         String f=modelFile==null?"None":modelFile.getName()+" ("+(modelFile.length()/1024/1024)+" MB)";
-        String report="Model: "+mode+"\nFile: "+f+"\nLast inference stage: "+lastInferenceStatus+"\nSaved: "+getSetting("last_inference","None")+"\n\nIf stuck during prompt processing, it may be slow CPU inference. If you see ERROR, copy that exact message.";
+        String report="Model: "+mode+"\nFile: "+f+"\nCurrent stage: "+latestStage+"\nElapsed: "+(inferenceStartedAt>0?(System.currentTimeMillis()-inferenceStartedAt)/1000+" s":"Not generating")+"\nLast inference stage: "+lastInferenceStatus+"\nSaved: "+getSetting("last_inference","None")+"\n\nIf stuck during prompt processing, it may be slow CPU inference. If you see ERROR, copy that exact message.";
         new AlertDialog.Builder(this).setTitle("Native engine diagnostics").setMessage(report)
             .setNeutralButton("Copy",(d,w)->{
                 android.content.ClipboardManager cb=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
@@ -329,17 +332,26 @@ public final class MainActivity extends Activity {
     }
     private void render(){
         LinearLayout root=column();root.setBackgroundColor(BG);root.setFocusableInTouchMode(true);setContentView(root);installSafeArea(root);
-        LinearLayout header=row();pad(header,10,3,12,3);root.addView(header,lp(-1,62));
-        petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
-        petView.setContentDescription("Open interactive Prometheus companion");
-        petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(56,50));
-        LinearLayout title=column();pad(title,9,0,0,0);
+        LinearLayout header=row();pad(header,10,5,10,5);root.addView(header,lp(-1,67));
+        ImageView mark=new ImageView(this);mark.setImageResource(R.drawable.prometheus_mark);
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);mark.setContentDescription("Prometheus Nova symbol");
+        mark.setOnClickListener(v->showPetDialog());header.addView(mark,lp(50,50));
+        LinearLayout title=column();pad(title,10,0,0,0);
         header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        TextView titleText=text("PROMETHEUS",17,FORE,true);titleText.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
-        title.addView(titleText);
-        status=text(ready?"● Model ready":busy?"● Working…":"● No model loaded",12,ready?MINT:MUTED,false);title.addView(status);
-        Button menu=button("☰",this::openNavigation);menu.setTextSize(22);header.addView(menu,lp(49,44));
-        page=column();pad(page,15,3,15,5);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
+        TextView titleText=text("PROMETHEUS",17,FORE,true);
+        titleText.setLetterSpacing(.07f);title.addView(titleText);
+        status=text(ready?"● Offline AI ready":busy?"● Working locally…":"○ Offline model required",12,ready?0xff59eab4:MUTED,false);
+        status.setSingleLine(true);status.setEllipsize(android.text.TextUtils.TruncateAt.END);title.addView(status);
+        petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
+        petView.setContentDescription("Open interactive companion · Feed or praise");
+        petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(44,44));
+        Button menu=button("☰",this::openNavigation);menu.setContentDescription("Open menu and diagnostics");
+        menu.setTextSize(20);header.addView(menu,lp(45,44));
+        View hairline=new View(this);
+        hairline.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{0xff30d7f2,0xff8e68ed,0xffff8cd7}));
+        root.addView(hairline,lp(-1,1));
+        page=column();pad(page,11,7,11,8);root.addView(page,new LinearLayout.LayoutParams(-1,0,1));
         if(activeTab.equals("Chat"))showChat();
         else if(activeTab.equals("Library"))showLibrary();
         else if(activeTab.equals("Projects"))showProjects();
@@ -368,19 +380,30 @@ public final class MainActivity extends Activity {
         thread=column();pad(thread,0,5,0,9);scroller.addView(thread);
         page.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
         if(messages.isEmpty()){
-            TextView empty=text("Talk to Prometheus.\nYour conversations stay on this phone.",17,MUTED,false);
+            TextView empty=text("Ask anything.\nPrometheus works privately on your phone.\n\nTap the flame to feed your companion.",17,MUTED,false);
             empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
         }else for(String[] m:messages)addBubble(m[0],m[1]);
-        LinearLayout sendbar=row();sendbar.setBackground(bg(SURFACE,19,BORDER));pad(sendbar,7,4,6,4);
+        LinearLayout sendbar=row();
+        GradientDrawable composerBg=new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{0xff1a294b,0xff252443,0xff432a5d});
+        composerBg.setCornerRadius(dp(20));composerBg.setStroke(dp(2),0xff789fe4);
+        sendbar.setBackground(composerBg);pad(sendbar,8,6,7,6);
         page.addView(sendbar,lp(-1,-2));
         composer=new EditText(this);composer.setTextColor(FORE);composer.setHintTextColor(MUTED);
-        composer.setTextSize(chatFontSize);composer.setHint("Message…");composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setTextSize(chatFontSize);composer.setHint("Message Prometheus…");
+        composer.setBackgroundColor(Color.TRANSPARENT);
+        composer.setFocusable(true);composer.setFocusableInTouchMode(true);
+        composer.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
         composer.setMinLines(1);composer.setMaxLines(4);composer.setInputType(0x00020001|0x00020000);
         sendbar.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
         Button stop=button("■",()->{cancelRequested=true;nativeStop();});
         stop.setContentDescription("Stop generation");stop.setTextColor(PINK);stop.setTextSize(18);
         sendbar.addView(stop,lp(40,45));
-        Button send=button("↑",this::send);send.setContentDescription("Send message");send.setTextSize(19);send.setTextColor(MINT);
+        Button send=button("➤",this::send);send.setContentDescription("Send message to offline model");
+        send.setTextSize(21);send.setTextColor(FORE);
+        GradientDrawable sendBg=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            new int[]{0xff2bdcf5,0xff9558e5,0xffff88d5});
+        sendBg.setCornerRadius(dp(15));send.setBackground(sendBg);
         sendbar.addView(send,lp(41,45));
         scrollBottom();
     }
@@ -389,7 +412,11 @@ public final class MainActivity extends Activity {
         TextView who=text(role.equals("user")?"You":"Prometheus",12,role.equals("user")?MINT:MUTED,true);
         wrapper.addView(who,lp(-1,-2));
         TextView body=text(msg,chatFontSize,FORE,false);body.setTextIsSelectable(true);body.setLineSpacing(dp(3),1f);
-        pad(body,14,11,14,11);body.setBackground(bg(role.equals("user")?USER:SURFACE,14,0));
+        pad(body,14,12,14,12);
+        GradientDrawable bubbleBg=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            role.equals("user")?new int[]{0xff482751,0xff38315b}:new int[]{0xff152d4a,0xff242b48});
+        bubbleBg.setCornerRadius(dp(17));bubbleBg.setStroke(dp(1),role.equals("user")?0xffdc83cf:0xff69d6ef);
+        body.setBackground(bubbleBg);
         LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(5);wrapper.addView(body,p);
         return body;
     }
@@ -426,7 +453,9 @@ public final class MainActivity extends Activity {
             return;
         }
         if(busy){
-            notify("Prometheus is already responding. Use Stop before sending another message.");
+            queuedPrompt=q;saveSetting("queued_prompt",q);composer.setText("");
+            notify("Message saved. It will send when the active operation finishes.");
+            if(status!=null)status.setText("● Message queued");
             return;
         }
         composer.setText("");
@@ -456,6 +485,7 @@ public final class MainActivity extends Activity {
         addBubble("user",q);
         streamingBubble=addBubble("assistant","");
         scrollBottom();setBusy(true,"● Preparing response…");
+        inferenceStartedAt=System.currentTimeMillis();
         recordInference("Preparing response");
         synchronized(streamBytes){streamBytes.reset();}
         lastPartialSave=0;lastDisplayMs=0;
@@ -508,11 +538,13 @@ public final class MainActivity extends Activity {
             try{db.execSQL("DELETE FROM generation_state WHERE id=1");}catch(Exception ignored){}
             sharedGenerating=false;foregroundEnd();
             runUI(()->{
+                inferenceStartedAt=0L;
                 setBusy(false,"● Model ready");
                 if(streamingBubble!=null){streamingBubble.setText(answer);streamingBubble=null;}
                 messages.add(new String[]{"assistant",answer});
                 db.execSQL("INSERT INTO messages(role,body) VALUES(?,?)",new Object[]{"assistant",answer});
                 scrollBottom();
+                if(queuedPrompt!=null && ready)main.postDelayed(this::deliverQueuedPrompt,350);
             });
         });
     }

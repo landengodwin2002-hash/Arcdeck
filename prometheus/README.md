@@ -52,3 +52,11 @@ Android 15/16 system bars and keyboard insets are handled explicitly for reachab
 6. Only then run `prometheus-sync --memory-only` and `prometheus-sync --books-only`, opening the app during each transfer. The original Termux data is not deleted.
 7. If a reply is interrupted, the chat page displays its saved unfinished response and a Retry option.
 8. For information on failures, run `prometheus-sync --diagnostics` after a sync.
+
+## v1.6 Nova (distinct branded APK)
+- Distinct launcher icon: the blue/pink Prometheus torch mascot, derived from the new approved visual mockup. Launcher label: Prometheus Nova, separate from old test apps.
+- Better visible Send button, larger focusable message editor and fewer buttons covering messages; Android insets retained.
+- Messages typed during busy/model-loading states are queued and automatically submitted after current work.
+- Live inference stage and elapsed-time diagnostics. Normal reply budget begins at 192 tokens for faster responsiveness on the existing 4B abliterated model; user may change response length in settings.
+- Full knowledge library and persisted chats/memory remain part of native app. The canonical imported model remains the existing locally stored abliterated GGUF.
+- The app has *not* been proven to generate on a physical phone until `prometheus-sync --probe` succeeds; compilation alone is not inference validation.

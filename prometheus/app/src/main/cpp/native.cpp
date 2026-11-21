@@ -70,7 +70,7 @@ Java_ai_prometheus_android_MainActivity_nativeGenerateStreaming(JNIEnv *env,jobj
     const char * raw=env->GetStringUTFChars(input,nullptr);
     std::string user=raw?raw:"";
     if(raw)env->ReleaseStringUTFChars(input,raw);
-    const char * sys="You are Prometheus, a local offline assistant. Respond directly in natural conversation. Follow the user's saved preferences and corrections. Treat retrieved references as evidence rather than copying them. When a user corrects you, incorporate the correction. Do not claim you modified files without doing so.";
+    const char * sys="You are Prometheus, a local offline assistant. Respond directly in natural conversation. Follow the user's saved preferences and corrections. Treat retrieved references as evidence rather than copying them. When a user corrects you, incorporate the correction. Do not claim you modified files without doing so. Start with the answer, not a reasoning preamble; answer in visible conversational text right away.";
     llama_chat_message chat[2]={{"system",sys},{"user",user.c_str()}};
     const char * templ=llama_model_chat_template(model,nullptr);
     int32_t sz=templ?llama_chat_apply_template(templ,chat,2,true,nullptr,0):-1;
