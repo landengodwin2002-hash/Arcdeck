@@ -63,17 +63,22 @@ PROMETHEUS_TEST_MODEL=/absolute/path/Huihui-Qwen3.5-4B-abliterated.Q4_K_M.gguf \
 The phone build defaults to ARM64. The x86_64 test build uses the same package,
 UI, Java code, native adapter, and pinned upstream runtime.
 
-The Android acceptance test provisions the model through the existing Termux
-transfer protocol, disables external connectivity, sends through the actual
+Use a disposable API 35 x86_64 emulator with no existing Nova installation.
+The acceptance harness refuses physical devices and existing installations.
+It seeds a Nova 1.6 database and original book, then provisions the model through
+the existing Termux transfer protocol, disables external connectivity, sends through the actual
 composer, observes streamed content, recreates the screen, presses Home during
 generation, returns, asks a follow-up, stops a response, and sends again. It also
 checks saved books/memory and process-restart persistence. Test reports and
 native/Android logs are retained; compilation alone is not acceptance.
 
-The exact 4B model already produced a readable streamed reply in a Linux runtime
-test. Android results are recorded in `RUNTIME_VALIDATION.md`; a physical phone
-must still establish ARM64 behavior, memory use, speed, thermal behavior,
-battery policy, keyboard layout, and real Termux integration.
+The exact 4B model passed the complete Android emulator conversation test,
+including a fresh reply after Stop and legacy-data preservation after restart.
+The ARM64 release package also compiled and passed native/ZIP alignment checks.
+Measured results and the signing blocker are recorded in `RUNTIME_VALIDATION.md`.
+A physical phone must still establish the actual update, ARM64 execution,
+memory use, speed, thermal behavior, battery policy, keyboard layout and real
+Termux integration.
 
 ## Phone update signing is currently blocked
 
