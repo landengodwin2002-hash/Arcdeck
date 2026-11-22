@@ -1,5 +1,5 @@
 {
-  "delivery_ready": false,
+  "delivery_ready": true,
   "application_id": "ai.prometheus.offline.chat",
   "version": "1.0.0",
   "source_commit": "37c317ef481f22250baf6d8a63b717a13705a1a9",
