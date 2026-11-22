@@ -1,19 +1,48 @@
 plugins { id 'com.android.application' }
+def targetAbis = (project.findProperty('prometheusAbis') ?: 'arm64-v8a').toString().split(',')
 android {
     namespace 'ai.prometheus.android'
     compileSdk 35
     ndkVersion "27.2.12479018"
     defaultConfig {
-        applicationId 'ai.prometheus.offline.nova'
+        applicationId 'ai.prometheus.offline.chat'
         minSdk 26
         targetSdk 35
-        versionCode 6
-        versionName '1.6.0-nova-chat'
-        ndk { abiFilters 'arm64-v8a' }
-        externalNativeBuild { cmake { cppFlags '-std=c++17 -O2 -fexceptions'; arguments '-DGGML_NATIVE=OFF', '-DGGML_OPENMP=OFF', '-DGGML_LLAMAFILE=OFF', '-DLLAMA_OPENSSL=OFF', '-DGGML_VULKAN=OFF', '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_BUILD_SERVER=OFF' } }
+        versionCode 2
+        versionName '1.0.1'
+        ndk { abiFilters.addAll(targetAbis.toList()) }
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        externalNativeBuild { cmake {
+            cppFlags '-std=c++17 -fexceptions'
+            arguments '-DCMAKE_BUILD_TYPE=Release', '-DANDROID_STL=c++_static', '-DGGML_NATIVE=OFF', '-DGGML_OPENMP=OFF',
+                '-DGGML_LLAMAFILE=OFF', '-DLLAMA_OPENSSL=OFF', '-DGGML_VULKAN=OFF',
+                '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DGGML_BMI2=OFF'
+            targets 'prometheus'
+        } }
+
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        if (System.getenv('PROMETHEUS_KEYSTORE')) {
+            prometheus {
+                storeFile file(System.getenv('PROMETHEUS_KEYSTORE'))
+                storePassword System.getenv('PROMETHEUS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('PROMETHEUS_KEY_ALIAS')
+                keyPassword System.getenv('PROMETHEUS_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (System.getenv('PROMETHEUS_KEYSTORE')) signingConfig signingConfigs.prometheus
+        }
+    }
 }
-dependencies { implementation 'com.tom-roush:pdfbox-android:2.0.27.0' }
+dependencies {
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

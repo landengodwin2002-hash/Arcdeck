@@ -1,16 +1,20 @@
-name: Prometheus Native ARM64 APK
+name: Prometheus offline conversation
 on:
   push:
     branches: [prometheus-native-app]
+    paths: ['prometheus/**', '.github/workflows/prometheus-native-android.yml']
   pull_request:
-    branches: [main]
+    branches: [main, prometheus-native-app]
     paths: ['prometheus/**', '.github/workflows/prometheus-native-android.yml']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: prometheus-offline-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  build:
-    name: Compile independent offline Prometheus APK
+  verify:
+    name: Build and exercise real offline conversation
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -22,30 +26,78 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Install SDK and NDK
+      - name: Install pinned native toolchain
         run: |
-          echo "Android SDK: $ANDROID_HOME"
-          SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          test -n "$SDKMGR" || { echo "Android sdkmanager missing"; find "$ANDROID_HOME" -maxdepth 3 -type f | head -30; exit 1; }
-          "$SDKMGR" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
-          yes | "$SDKMGR" --licenses || true
-      - name: Fetch compatible pinned llama.cpp inference source
-        run: |
-          mkdir -p prometheus/app/src/main/vendor
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp prometheus/app/src/main/vendor/llama.cpp
-          cd prometheus/app/src/main/vendor/llama.cpp
-          git fetch --depth 1 origin 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
-          git checkout --detach 46eb1742db6d2caec1bfa848c5702b1bdcc815e5
-      - name: Build debug-signed APK
-        working-directory: prometheus
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
-      - name: Verify valid APK
-        run: |
-          test -s prometheus/app/build/outputs/apk/debug/app-debug.apk
-          unzip -l prometheus/app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libprometheus.so'
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging prometheus/app/build/outputs/apk/debug/app-debug.apk | head -6
-      - uses: actions/upload-artifact@v4
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+      - name: Fetch unmodified pinned llama.cpp
+        run: python3 prometheus/scripts/fetch_runtime.py
+      - name: Restore the pinned native build
+        id: native-cache
+        uses: actions/cache/restore@v4
         with:
-          name: Prometheus-Standalone-Abliterated-Android-APK
-          path: prometheus/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            prometheus/app/.cxx
+            prometheus/app/build/intermediates/cxx
+          key: ${{ runner.os }}-nova-native-v1-${{ hashFiles('prometheus/app/build.gradle', 'prometheus/app/src/main/cpp/**', 'prometheus/scripts/fetch_runtime.py') }}
+      - name: Build the emulator target; verify stream framing
+        working-directory: prometheus
+        run: gradle --no-daemon --max-workers=3 -PprometheusAbis=x86_64 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Verify optimized native compiler commands
+        working-directory: prometheus
+        run: python3 scripts/check_native_optimization.py
+      - name: Cache the successfully compiled native runtime
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            prometheus/app/.cxx
+            prometheus/app/build/intermediates/cxx
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Fetch the exact existing 4B abliterated GGUF for runtime tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/prometheus-model"
+          curl --fail --location --retry 3 'https://huggingface.co/mradermacher/Huihui-Qwen3.5-4B-abliterated-GGUF/resolve/main/Huihui-Qwen3.5-4B-abliterated.Q4_K_M.gguf?download=true' -o "$RUNNER_TEMP/prometheus-model/existing-4b-abliterated.gguf"
+          echo "423f10b6ec2d99c3378143d7cd3b80eb4887b3ed92103103ac59173b404f4f7c  $RUNNER_TEMP/prometheus-model/existing-4b-abliterated.gguf" | sha256sum -c -
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test streamed answers, Home, screen recreation, history and Stop without internet
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PROMETHEUS_TEST_MODEL: ${{ runner.temp }}/prometheus-model/existing-4b-abliterated.gguf
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          ram-size: 6144M
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          script: bash prometheus/scripts/android_acceptance.sh
+      - name: Build and inspect the ARM64 phone artifact
+        working-directory: prometheus
+        run: |
+          gradle --no-daemon --max-workers=3 :app:assembleRelease
+          python3 scripts/check_native_optimization.py
+          python3 scripts/check_phone_apk.py app/build/outputs/apk/release/app-release-unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Save runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prometheus-validation
+          path: |
+            prometheus/test-results/
+            prometheus/app/build/reports/tests/
+            prometheus/app/build/reports/lint-results-debug.html
+          if-no-files-found: warn
+      - name: Save the tested ARM64 package for permanent local signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prometheus-ARM64-unsigned
+          path: |
+            prometheus/app/build/outputs/apk/release/app-release-unsigned.apk
+            prometheus/app/build/outputs/apk/release/output-metadata.json
           if-no-files-found: error

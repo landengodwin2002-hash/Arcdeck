@@ -1,62 +1,94 @@
-# Prometheus Companion v1.3 (native APK)
+# Prometheus
 
-An offline Android ARM64 chatbot using a 4B abliterated GGUF in the app's own llama.cpp native library. Termux is used only to provision the native app's model and knowledge, not for chat.
+One offline Android chat application, using the existing abliterated 4B GGUF and Termux maintenance data.
 
-## Changes in v1.3
+- Package: `ai.prometheus.offline.chat`
+- Version: `1.0.1`
+- Interface: existing Nova layout, colors and icon, labeled Prometheus
+- Runtime: unmodified llama.cpp `afe77e18fadc2e673c6a6299495a443e17378ce4`
+- Stable release certificate: `scripts/release-certificate.sha256`
 
-- Minimal chat-first Android UI. Header is a custom, animated original virtual-pet character; all other pages are in the menu. Text is larger, and the conversation has the available screen space.
-- Pet dialog provides **Feed**, **Praise**, **Discipline**, and **Rest**. Hunger, mood and trust persist in the Android app's SQLite settings. This is a simulated game; no model can literally suffer. Praise may save a positive example of the most recent assistant answer. Discipline may save a corrective instruction. These are prompt/memory updates, not model-weight training.
-- Native inference records sampled tokens using `llama_sampler_accept`, reports prompt-processing and generation stages, caps contexts to avoid overload, and retries a fallback template on zero-token output. UTF-8 streaming bytes are turned into the Java answer, avoiding `NewStringUTF` on arbitrary Unicode model output.
-- Optional **Diagnostics** screen provides useful model and error details; the Termux sync command can receive the most recent native diagnostic JSON.
+This independent installation does not replace or uninstall Nova. Existing Termux
+files stay in place. The new app uses its own private database/model/book copies;
+private history held only inside Nova is not automatically accessible to another
+Android application.
 
-## Installation (Termux-first)
+## Install and reuse the existing model
 
-1. Install the compiled `Prometheus-Companion-v1.3.apk`. Android will require installation approval when appropriate.
-2. Start Termux and install the sync command:
+Install the signed `Prometheus.apk`. In the existing Termux setup, run:
 
-   `curl -fsSL https://raw.githubusercontent.com/landengodwin2002-hash/Arcdeck/prometheus-native-app/prometheus/termux/prometheus-sync.py -o "$PREFIX/bin/prometheus-sync" && chmod +x "$PREFIX/bin/prometheus-sync"`
+```sh
+prometheus-sync
+```
 
-3. Run `prometheus-sync` and **then open the installed Prometheus Companion app**. The app retrieves the already-installed abliterated 4B GGUF, saved chats, memory, project records, and books from a temporary local server in Termux. The Termux process exits once transfer is acknowledged.
-4. For a model-only retry use `prometheus-sync --model-only`; book-only `--books-only`; memory-only `--memory-only`.
-5. To inspect native diagnostics run `prometheus-sync --diagnostics` after a previous sync (to refresh diagnostics, start `prometheus-sync --memory-only`, open the app, then run diagnostics).
+Open **Prometheus** and allow the existing GGUF, saved data and books to transfer.
+The Library page lists transferred originals and indexed sources, plus the last
+transfer result. For a model-only transfer, use `prometheus-sync --model-only`;
+that command deliberately does not send books or saved data. Then send a message. The conversation then runs inside the APK without Termux or internet.
+The app uses the same transfer protocol as the installed maintenance command.
+No new model download is required when the existing GGUF is available in Termux.
 
-**Important:** The app has a new package ID, `ai.prometheus.offline.pet`. It installs beside the previous debug-signed v1.2 because the earlier CI debug signing certificate is not suitable for authenticated seamless updates. Nothing in the old v1.2 app or Termux is removed. This is a debug/test APK; production releases need stable private-key signing.
+Once conversation works, reuse the existing Termux data:
 
-## Known limitations
+```sh
+prometheus-sync --memory-only
+prometheus-sync --books-only
+```
 
-- Native model generation has not been verified with the actual user's GGUF on the target Android phone. A successful GitHub compilation verifies the APK structure, **not** that it will answer questions.
-- CPU-only 4B inference may take considerable time on a phone, especially before the first token. The UI now shows the current stage and errors without silently finishing.
-- No remote/cloud connection is needed to chat. A temporary localhost Termux server is used only for import, and is not cryptographically authenticated. Only start it while transferring files.
-- Recognition of scanned PDFs still needs OCR; advanced retrieval remains keyword-based; direct app self-modification and advanced tools are not yet implemented.
-- Pet feedback is persistent contextual preference data, not neural-weight fine-tuning. Its displayed happiness or distress is fictional.
+Open Prometheus after each command to receive it. The memory transfer imports
+existing Termux chats, corrections, projects and indexed passages. Original
+Termux databases and books are read without deleting or replacing them.
+`prometheus-sync --probe` runs a real local-model self-test;
+`prometheus-sync --diagnostics` reads the captured diagnostic report.
+Model replacement retains the prior GGUF as a timestamped backup.
 
-## v1.4 Safe Chat changes
+## Conversation and storage
 
-Android 15/16 system bars and keyboard insets are handled explicitly for reachable chat controls. Chat messages are queued during model load rather than silently discarded, with visible inference progress. Termux sync now runs on its own worker and loads the model before processing all books. Book/memory/model setup still runs through Termux. This preview uses a separate package ID because earlier CI debug APKs had independent signing keys; old installations and their data remain intact. Use `prometheus-sync` again with the new app open for migration.
+Application-owned work streams answer text, checkpoints partial replies, and
+commits the final answer independently of the Activity. A foreground service
+and bounded wake lock support generation while switching apps. The composer
+stays in place during runtime updates. A full process interruption retains
+saved history and exposes any checkpointed partial for recovery.
 
-## v1.5 persistent background work
+Storage is `databases/prometheus-native.db`, `files/models/prometheus.gguf`,
+and `files/books/`. The schema remains compatible with existing imported data.
+Starting a new chat archives the old conversation rather than deleting it.
+Ordinary chat uses the model's embedded template and bounded conversation
+context; memory/retrieval/companion expansion remains paused.
 
-- Foreground service for active offline inference, model loading and local imports while switching applications. Android may still terminate the process for severe RAM pressure; partial output is checkpointed in SQLite and can be retried.
-- Activity recreation no longer explicitly stops native inference or unloads the model.
-- Pending prompts and chat history are saved; recent completed answers are refreshed on return.
-- Original archives and indexed knowledge sources are counted separately.
-- Setup through Termux remains independent of native offline conversation.
-- Separate preview package ID avoids old ephemeral debug signing conflicts and preserves previous versions.
+## Build, test and sign
 
-## v1.5 Termux-only verification
-1. Install the new APK (separate package ID because earlier debug builds have different signing certificates).
-2. In Termux, update the management script: `curl -fL https://raw.githubusercontent.com/landengodwin2002-hash/Arcdeck/prometheus-native-app/prometheus/termux/prometheus-sync.py -o "$PREFIX/bin/prometheus-sync" && chmod +x "$PREFIX/bin/prometheus-sync"`.
-3. Run `prometheus-sync --status` to check the actual found model, original books, indexed Termux passages, and memory databases.
-4. Run `prometheus-sync --model-only`, then open the new APK while the terminal command is running. It will receive and load the existing 4B abliterated GGUF.
-5. Run `prometheus-sync --probe`, return to the APK, and read the response printed in Termux. This is an actual inference test, not a connection test.
-6. Only then run `prometheus-sync --memory-only` and `prometheus-sync --books-only`, opening the app during each transfer. The original Termux data is not deleted.
-7. If a reply is interrupted, the chat page displays its saved unfinished response and a Retry option.
-8. For information on failures, run `prometheus-sync --diagnostics` after a sync.
+Use Java 17, Gradle 8.13, Android SDK/build tools 35, NDK 27.2.12479018 and CMake 3.22.1.
 
-## v1.6 Nova (distinct branded APK)
-- Distinct launcher icon: the blue/pink Prometheus torch mascot, derived from the new approved visual mockup. Launcher label: Prometheus Nova, separate from old test apps.
-- Better visible Send button, larger focusable message editor and fewer buttons covering messages; Android insets retained.
-- Messages typed during busy/model-loading states are queued and automatically submitted after current work.
-- Live inference stage and elapsed-time diagnostics. Normal reply budget begins at 192 tokens for faster responsiveness on the existing 4B abliterated model; user may change response length in settings.
-- Full knowledge library and persisted chats/memory remain part of native app. The canonical imported model remains the existing locally stored abliterated GGUF.
-- The app has *not* been proven to generate on a physical phone until `prometheus-sync --probe` succeeds; compilation alone is not inference validation.
+```sh
+cd prometheus
+python3 scripts/fetch_runtime.py
+gradle -PprometheusAbis=x86_64 :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+python3 scripts/check_native_optimization.py
+PROMETHEUS_TEST_MODEL=/absolute/path/existing-4b-abliterated.gguf bash scripts/android_acceptance.sh
+gradle :app:assembleRelease
+```
+
+Acceptance provisioning requires a clean disposable emulator and host. It
+refuses physical phones, existing app installations and existing host Termux
+data. It exercises the real model through the keyboard/composer, displayed
+streaming, Home, recreation, follow-up context, Stop, a fresh Send, database
+restart, original-book bytes and real exports from old Termux schemas.
+
+CI produces the tested unsigned ARM64 package. Sign it with the privately
+backed-up permanent key using `scripts/sign_release.py`, supplying `--apk`,
+`--credentials` (the private backup's `signing.json`), `--apksigner`, `--zipalign`,
+`--aapt2` and `--out`. The signer verifies the new package, production build,
+permanent certificate and 16 KiB APK alignment. Never commit private signing
+credentials or generate a replacement key for routine updates.
+
+Measured runtime evidence and remaining physical-phone checks are recorded in
+`RUNTIME_VALIDATION.md`. Compilation alone is not acceptance.
+
+The 1.0.1 regression target is the reported physical-phone stall/page-switch
+failure. Generation state is displayed from the application worker on every
+page. Native prompt-processing counts distinguish prefill from streamed output.
+Prompt history is bounded to 1,024 tokens when trimming older turns, within a
+2,048-token model context; the database retains full messages. CPU batches are
+bounded to 32. Diagnostics → Copy includes the live native log, progress, RAM,
+service state and recent Android process-exit reasons.
