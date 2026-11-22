@@ -76,6 +76,13 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           script: bash prometheus/scripts/android_acceptance.sh
+      - name: Build and inspect the ARM64 phone artifact
+        working-directory: prometheus
+        run: |
+          gradle --no-daemon --max-workers=3 :app:assembleRelease
+          python3 scripts/check_native_optimization.py
+          python3 scripts/check_phone_apk.py app/build/outputs/apk/release/app-release-unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/app-release-unsigned.apk
       - name: Save runtime evidence
         if: always()
         uses: actions/upload-artifact@v4

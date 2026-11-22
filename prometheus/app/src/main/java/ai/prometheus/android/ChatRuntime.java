@@ -147,7 +147,11 @@ final class ChatRuntime {
                         public void content(String chunk) { text.append(chunk); }
                     });
                     if (text.toString().trim().isEmpty()) throw new IOException("No visible probe answer");
+                    stage("Model ready (self-test passed)");
                     return text.toString();
+                } catch (Exception error) {
+                    stage("ERROR: Model self-test failed: " + error.getMessage());
+                    throw error;
                 } finally { generating = false; probing = false; }
             });
         }

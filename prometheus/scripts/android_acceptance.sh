@@ -5,8 +5,21 @@ mkdir -p test-results
 apk=app/build/outputs/apk/debug/app-debug.apk
 tests=app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 model="${PROMETHEUS_TEST_MODEL:?Set PROMETHEUS_TEST_MODEL to the existing 4B GGUF}"
+# This harness provisions fixture data; never run it against a user's installation.
+if [ "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" != 1 ]; then
+    echo 'Acceptance provisioning requires a disposable Android emulator.' >&2
+    exit 1
+fi
+if adb shell pm path ai.prometheus.offline.nova | grep -q '^package:'; then
+    echo 'Use a clean emulator with no existing Nova installation; existing data was left untouched.' >&2
+    exit 1
+fi
 adb install -r "$apk"
 adb install -r "$tests"
+python3 scripts/legacy_fixture.py
+adb shell run-as ai.prometheus.offline.nova mkdir -p databases files/books
+adb shell -T "run-as ai.prometheus.offline.nova sh -c 'cat > databases/prometheus-native.db'" < test-results/legacy.db
+adb shell -T "run-as ai.prometheus.offline.nova sh -c 'cat > files/books/legacy-original.txt'" < test-results/legacy-original.txt
 # Exercise the real Termux maintenance protocol, not a file injection shortcut.
 adb reverse tcp:18765 tcp:18765
 transfer() {
@@ -72,8 +85,16 @@ adb shell am force-stop ai.prometheus.offline.nova
 python3 - <<'PY'
 import sqlite3
 db=sqlite3.connect('test-results/restarted.db')
-assert db.execute("select count(*) from messages where role='assistant'").fetchone()[0]>=3
+assert db.execute("select count(*) from messages where role='assistant'").fetchone()[0]>=4
+assert db.execute("select body from messages where id=2").fetchone()[0]=='Legacy answer retained'
+assert db.execute("select body from memory where kind='legacy'").fetchone()[0]=='Keep my original memory'
+assert db.execute("select description from projects where id=1").fetchone()[0]=='Keep my project'
+assert db.execute("select body from project_items where id=1").fetchone()[0]=='Keep my project note'
+assert db.execute("select body from passages where book='Legacy original'").fetchone()[0]=='Original searchable passage'
 assert db.execute("select count(*) from book_files where sha256='test-upgrade-sentinel'").fetchone()[0]==1
 assert db.execute("select count(*) from memory where kind='test' and body='migration sentinel'").fetchone()[0]>=1
 print('PROCESS_RESTART_DATABASE_PASS')
+print('LEGACY_DATABASE_PRESERVATION_PASS')
 PY
+adb exec-out run-as ai.prometheus.offline.nova cat files/books/legacy-original.txt > test-results/restarted-original.txt
+cmp test-results/legacy-original.txt test-results/restarted-original.txt

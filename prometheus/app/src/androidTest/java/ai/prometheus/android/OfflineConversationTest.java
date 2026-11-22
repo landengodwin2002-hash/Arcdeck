@@ -59,6 +59,15 @@ public class OfflineConversationTest {
         }
         return null;
     }
+    private boolean visibleText(View view,String prefix) {
+        if(view instanceof android.widget.TextView && view.isShown()
+                && ((android.widget.TextView)view).getText().toString().startsWith(prefix))return true;
+        if(view instanceof ViewGroup){
+            ViewGroup group=(ViewGroup)view;
+            for(int i=0;i<group.getChildCount();i++)if(visibleText(group.getChildAt(i),prefix))return true;
+        }
+        return false;
+    }
     private View action(View view,String description) {
         if (view.getContentDescription()!=null && description.contentEquals(view.getContentDescription())) return view;
         if (view instanceof ViewGroup) {
@@ -72,8 +81,9 @@ public class OfflineConversationTest {
     private void send(String text) {
         Activity activity=foreground(); assertNotNull(activity);
         int[] point=new int[2];
+        AtomicReference<EditText> originalInput=new AtomicReference<>();
         instrumentation.runOnMainSync(() -> {
-            EditText input=composer(activity.getWindow().getDecorView());assertNotNull(input);
+            EditText input=composer(activity.getWindow().getDecorView());assertNotNull(input);originalInput.set(input);
             input.getLocationOnScreen(point);point[0]+=input.getWidth()/2;point[1]+=input.getHeight()/2;
             input.setText("");
         });
@@ -85,6 +95,7 @@ public class OfflineConversationTest {
         instrumentation.runOnMainSync(() -> {
             View root=activity.getWindow().getDecorView();
             EditText input=composer(root);assertNotNull(input);assertTrue(input.hasFocus());
+            assertSame("A runtime update replaced the active composer",originalInput.get(),input);
             assertEquals("Keyboard input did not reach the composer",text,input.getText().toString());
             View send=action(root,"Send message to offline model");assertNotNull(send);assertTrue(send.isShown());
             assertTrue(send.performClick());
@@ -113,9 +124,11 @@ public class OfflineConversationTest {
         Activity first=instrumentation.startActivitySync(open);
         await("Model did not load",()->runtime.ready,600);
         assertTrue(new java.io.File(context.getFilesDir(),"models/prometheus.gguf").isFile());
+        long sentAt=SystemClock.elapsedRealtime();
         send("Remember this exact code: cobalt-7319. Count from 1 to 30, separated by spaces.");
         await("No streamed answer",()->runtime.generating&&!runtime.partial.trim().isEmpty(),600);
         String firstChunk=runtime.partial;
+        android.util.Log.i("PrometheusAcceptance","FIRST_CONTENT_MS="+(SystemClock.elapsedRealtime()-sentAt));
         assertFalse(firstChunk.contains("\uFFFD"));
         // Incoming text must not steal focus from someone composing the next message.
         Activity writing=foreground();
@@ -132,12 +145,14 @@ public class OfflineConversationTest {
         instrumentation.runOnMainSync(()->{
             EditText input=composer(writing.getWindow().getDecorView());
             assertTrue("Streaming stole keyboard focus",input.hasFocus());
+            assertTrue("Streamed content did not appear in the chat",visibleText(writing.getWindow().getDecorView(),firstChunk));
             assertEquals("draft survives",input.getText().toString());
         });
         instrumentation.runOnMainSync(first::recreate);
         instrumentation.getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
         await("Background reply did not finish",()->!runtime.generating,900);
         String answer=lastAssistant(db);
+        android.util.Log.i("PrometheusAcceptance","BACKGROUND_REPLY_CHARS="+answer.length());
         assertTrue("Expected readable text: "+answer,answer.trim().length()>3);
         assertFalse(answer.contains("<think>"));
         assertFalse(answer.contains("<|im_"));
@@ -159,6 +174,8 @@ public class OfflineConversationTest {
         assertEquals(beforeFollowup+1,replies(db));
         assertTrue("Conversation context was lost: "+lastAssistant(db),lastAssistant(db).toLowerCase().contains("cobalt-7319"));
 
+        android.util.Log.i("PrometheusAcceptance","CONTEXT_FOLLOWUP_PASS");
+
         // Cancellation must leave the application usable for another real turn.
         send("Write a very long numbered list of facts about the ocean.");
         await("Stop test never began streaming",()->runtime.generating&&!runtime.partial.isEmpty(),600);
@@ -166,6 +183,7 @@ public class OfflineConversationTest {
         instrumentation.runOnMainSync(()->action(current.getWindow().getDecorView(),"Stop generation").performClick());
         await("Stop did not complete",()->!runtime.generating,60);
         assertTrue(runtime.ready);
+        android.util.Log.i("PrometheusAcceptance","STOP_PASS");
         long beforeRestartedReply=replies(db);
         send("Say hello.");
         await("A message after Stop was rejected",()->runtime.generating,10);

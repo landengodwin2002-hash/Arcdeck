@@ -50,7 +50,10 @@ public final class MainActivity extends Activity {
             if(db!=null){
                 long newest=lastMessageId();
                 if(changed || newest!=lastRenderedId){
-                    lastRenderedId=newest;loadSavedMessages();render();
+                    lastRenderedId=newest;loadSavedMessages();
+                    // Retain the actual EditText and its IME composing region while replies change.
+                    if("Chat".equals(activeTab) && thread!=null){refreshRecoveryPanel();refreshThread();}
+                    if(petView!=null)petView.setStats(petHunger,petMood,petTrust,busy);
                 }
                 if(status!=null)status.setText("● "+runtime.stage);
                 if("Chat".equals(activeTab) && runtime.generating && streamingBubble!=null){
@@ -78,7 +81,7 @@ public final class MainActivity extends Activity {
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ArrayList<String[]> messages=new ArrayList<>();
     private SQLiteDatabase db;
-    private LinearLayout page,thread,toolbar;
+    private LinearLayout page,thread,toolbar,recoveryPanel;
     private ScrollView scroller;
     private EditText composer;
     private TextView status,bookCount;
@@ -363,24 +366,8 @@ public final class MainActivity extends Activity {
         if(editing&&composer!=null){composer.requestFocus();composer.setSelection(Math.max(0,Math.min(selection,composer.length())));}
     }
     private void showChat(){
-        try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
-            if(c.moveToFirst()){
-                final String question=c.getString(0), partial=c.getString(1), phase=c.getString(2);
-                TextView state=text(sharedGenerating?"● Generating in background: "+phase:
-                    "● Interrupted reply saved. You can retry it.",13,MINT,false);
-                pad(state,5,4,5,6);page.addView(state,lp(-1,-2));
-                if(!sharedGenerating){
-                    if(partial!=null && !partial.isEmpty()){
-                        TextView saved=text("Recovered partial answer:\n"+partial,13,MUTED,false);
-                        pad(saved,5,4,5,7);page.addView(saved,lp(-1,-2));
-                    }
-                    page.addView(button("Retry unfinished question",()->{
-                        runtime.store.finish(partial==null?"":partial,"Previous response was interrupted.",false);
-                        if(composer!=null){composer.setText(question);send();}
-                    }),lp(-1,43));
-                }
-            }
-        }catch(Exception ignored){}
+        recoveryPanel=column();page.addView(recoveryPanel,lp(-1,-2));
+        refreshRecoveryPanel();
         LinearLayout companionBar=row();pad(companionBar,9,2,5,5);
         companionBar.setBackground(bg(0xff1a2540,14,0xff47456d));
         TextView petMoodText=text("✦ Promie  ·  "+(petMood>65?"Happy":petMood>35?"Calm":"Needs attention"),13,PINK,true);
@@ -393,17 +380,7 @@ public final class MainActivity extends Activity {
         scroller=new ScrollView(this);scroller.setFillViewport(true);
         thread=column();pad(thread,0,5,0,9);scroller.addView(thread);
         page.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
-        if(messages.isEmpty()){
-            TextView empty=text("Ask anything.\nPrometheus works privately on your phone.\n\nTap the flame to feed your companion.",17,MUTED,false);
-            empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
-        }else for(String[] m:messages)addBubble(m[0],m[1]);
-        if(sharedGenerating){
-            String partial="";
-            try(Cursor current=db.rawQuery("SELECT partial FROM generation_state WHERE id=1",null)){
-                if(current.moveToFirst())partial=current.getString(0);
-            }catch(Exception ignored){}
-            streamingBubble=addBubble("assistant",partial==null?"":partial);
-        }else streamingBubble=null;
+        refreshThread();
         LinearLayout sendbar=row();
         GradientDrawable composerBg=new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
             new int[]{0xff1a294b,0xff252443,0xff432a5d});
@@ -426,6 +403,40 @@ public final class MainActivity extends Activity {
             new int[]{0xff2bdcf5,0xff9558e5,0xffff88d5});
         sendBg.setCornerRadius(dp(15));send.setBackground(sendBg);
         sendbar.addView(send,lp(41,45));
+        scrollBottom();
+    }
+    private void refreshRecoveryPanel(){
+        if(recoveryPanel==null)return;
+        recoveryPanel.removeAllViews();
+        try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
+            if(c.moveToFirst()){
+                final String question=c.getString(0), partial=c.getString(1), phase=c.getString(2);
+                TextView state=text(sharedGenerating?"● Generating in background: "+phase:
+                    "● Interrupted reply saved. You can retry it.",13,MINT,false);
+                pad(state,5,4,5,6);recoveryPanel.addView(state,lp(-1,-2));
+                if(!sharedGenerating){
+                    if(partial!=null && !partial.isEmpty()){
+                        TextView saved=text("Recovered partial answer:\n"+partial,13,MUTED,false);
+                        pad(saved,5,4,5,7);recoveryPanel.addView(saved,lp(-1,-2));
+                    }
+                    recoveryPanel.addView(button("Retry unfinished question",()->{
+                        runtime.store.finish(partial==null?"":partial,"Previous response was interrupted.",false);
+                        if(composer!=null){composer.setText(question);send();}
+                    }),lp(-1,43));
+                }
+            }
+        }catch(Exception ignored){}
+    }
+    private void refreshThread(){
+        if(thread==null)return;
+        thread.removeAllViews();
+        if(messages.isEmpty()){
+            TextView empty=text("Ask anything.\nPrometheus works privately on your phone.\n\nTap the flame to feed your companion.",17,MUTED,false);
+            empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
+        }else for(String[] m:messages)addBubble(m[0],m[1]);
+        if(sharedGenerating){
+            streamingBubble=addBubble("assistant",runtime.partial);
+        }else streamingBubble=null;
         scrollBottom();
     }
     private TextView addBubble(String role,String msg){
@@ -483,7 +494,7 @@ public final class MainActivity extends Activity {
         }
         draft="";saveSetting("chat_draft","");
         sharedGenerating=true;busy=true;
-        loadSavedMessages();lastRenderedId=lastMessageId();render();
+        loadSavedMessages();lastRenderedId=lastMessageId();refreshRecoveryPanel();refreshThread();
     }
     private String searchBooks(String q){
         String[] words=q.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9 ]+"," ").trim().split("\\s+");
