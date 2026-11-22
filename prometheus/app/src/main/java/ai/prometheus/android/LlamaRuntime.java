@@ -172,6 +172,9 @@ final class LlamaRuntime {
         JSONArray messages = fit(history, output);
         if (cancelled.get()) return;
         HttpURLConnection c = connection("/v1/chat/completions", 600_000);
+        c.setRequestProperty("Accept", "text/event-stream");
+        // Android otherwise requests transparent gzip, which can buffer small SSE chunks.
+        c.setRequestProperty("Accept-Encoding", "identity");
         activeRequest = c;
         try {
             if (cancelled.get()) return;

@@ -42,6 +42,9 @@ jobs:
       - name: Build the emulator target; verify stream framing
         working-directory: prometheus
         run: gradle --no-daemon --max-workers=3 -PprometheusAbis=x86_64 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Verify optimized native compiler commands
+        working-directory: prometheus
+        run: python3 scripts/check_native_optimization.py
       - name: Cache the successfully compiled native runtime
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

@@ -26,6 +26,7 @@ public class OfflineConversationTest {
     private final Context context = instrumentation.getTargetContext();
     interface Condition { boolean done() throws Exception; }
     private void await(String why, Condition condition, long seconds) throws Exception {
+        long cpuAtStart=android.os.Process.getElapsedCpuTime();
         long deadline = SystemClock.elapsedRealtime() + seconds * 1000;
         while (SystemClock.elapsedRealtime() < deadline) {
             if (condition.done()) return;
@@ -33,6 +34,10 @@ public class OfflineConversationTest {
                 fail(why+"; "+ChatRuntime.get(context).stage+"\n"+ChatRuntime.get(context).engine.diagnostic());
             SystemClock.sleep(100);
         }
+        android.os.Debug.MemoryInfo memory=new android.os.Debug.MemoryInfo();
+        android.os.Debug.getMemoryInfo(memory);
+        android.util.Log.e("PrometheusAcceptance",why+" cpu_ms="+(android.os.Process.getElapsedCpuTime()-cpuAtStart)
+                +" pss_kib="+memory.getTotalPss()+" native_heap_bytes="+android.os.Debug.getNativeHeapAllocatedSize());
         fail(why + "; " + ChatRuntime.get(context).stage + "\n" + ChatRuntime.get(context).engine.diagnostic());
     }
     private Activity foreground() {

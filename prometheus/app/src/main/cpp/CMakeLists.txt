@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
+# Inference must be optimized even when the Java APK is a debug test build.
+# This follows the upstream llama.android library configuration.
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Optimized on-device inference" FORCE)
 project(prometheus LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

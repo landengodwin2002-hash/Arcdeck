@@ -13,8 +13,8 @@ android {
         ndk { abiFilters.addAll(targetAbis.toList()) }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         externalNativeBuild { cmake {
-            cppFlags '-std=c++17 -O2 -fexceptions'
-            arguments '-DANDROID_STL=c++_static', '-DGGML_NATIVE=OFF', '-DGGML_OPENMP=OFF',
+            cppFlags '-std=c++17 -fexceptions'
+            arguments '-DCMAKE_BUILD_TYPE=Release', '-DANDROID_STL=c++_static', '-DGGML_NATIVE=OFF', '-DGGML_OPENMP=OFF',
                 '-DGGML_LLAMAFILE=OFF', '-DLLAMA_OPENSSL=OFF', '-DGGML_VULKAN=OFF',
                 '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DGGML_BMI2=OFF'
             targets 'prometheus'

@@ -55,6 +55,8 @@ adb shell settings put global airplane_mode_on 1
 adb shell svc wifi disable
 adb shell svc data disable
 adb shell settings put secure show_ime_with_hard_keyboard 1
+adb shell cat /proc/cpuinfo > test-results/cpuinfo.txt
+adb shell cat /proc/meminfo > test-results/system-memory.txt
 adb logcat -c
 adb shell am instrument -w -r ai.prometheus.offline.nova.test/androidx.test.runner.AndroidJUnitRunner | tee test-results/instrumentation.txt
 adb logcat -d > test-results/logcat.txt
