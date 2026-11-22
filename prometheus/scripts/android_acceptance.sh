@@ -17,6 +17,7 @@ fi
 adb install -r "$apk"
 adb install -r "$tests"
 python3 scripts/legacy_fixture.py
+python3 scripts/termux_fixture.py
 adb shell run-as ai.prometheus.offline.chat mkdir -p databases files/books
 adb shell -T "run-as ai.prometheus.offline.chat sh -c 'cat > databases/prometheus-native.db'" < test-results/legacy.db
 adb shell -T "run-as ai.prometheus.offline.chat sh -c 'cat > files/books/legacy-original.txt'" < test-results/legacy-original.txt
@@ -62,7 +63,6 @@ from pathlib import Path
 Path('test-results/maintenance-original.txt').write_text('Prometheus maintenance fixture: original book bytes are preserved. '*12)
 BOOK
 transfer --books-only --include "$PWD/test-results/maintenance-original.txt"
-python3 scripts/termux_fixture.py
 transfer --memory-only
 transfer --probe
 adb reverse --remove tcp:18765
