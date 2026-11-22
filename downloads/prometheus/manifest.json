@@ -1,0 +1,9 @@
+{
+  "delivery_ready": false,
+  "application_id": "ai.prometheus.offline.chat",
+  "version": "1.0.0",
+  "source_commit": "37c317ef481f22250baf6d8a63b717a13705a1a9",
+  "archive_sha256": "d6507a6202a2c368d9402b442e22182af10ee1d72bdc9e40835862c2010700c4",
+  "apk_sha256": "805488a34e0ef5cafcf2ebd5ad09cc78f85773d8ef2f355e412d02fc5f743750",
+  "parts": 33
+}

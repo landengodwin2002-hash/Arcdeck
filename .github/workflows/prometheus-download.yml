@@ -1,0 +1,48 @@
+name: Publish signed Prometheus download
+on:
+  push:
+    branches: [prometheus/apk-download]
+    paths: ['downloads/prometheus/**', '.github/workflows/prometheus-download.yml']
+permissions:
+  contents: write
+concurrency:
+  group: prometheus-download
+  cancel-in-progress: true
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover and verify the already tested signed APK
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,io,json,os,zipfile
+          root=Path('downloads/prometheus')
+          manifest=json.loads((root/'manifest.json').read_text())
+          assert manifest['delivery_ready']
+          parts=sorted(root.glob('part-*.bin'))
+          assert len(parts)==manifest['parts']
+          data=b''.join(part.read_bytes() for part in parts)
+          assert hashlib.sha256(data).hexdigest()==manifest['archive_sha256']
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              assert archive.namelist()==['Prometheus.apk']
+              apk=archive.read('Prometheus.apk')
+          assert hashlib.sha256(apk).hexdigest()==manifest['apk_sha256']
+          target=Path(os.environ['RUNNER_TEMP'])
+          (target/'Prometheus.apk').write_bytes(apk)
+          notes='Prometheus 1.0.0: signed ARM64 offline chat APK.\n\nReuse the existing 4B abliterated GGUF through Termux: run `prometheus-sync --model-only`, then open Prometheus. Conversations run inside the APK after setup.\n\nReal-model Android emulator tests passed for streaming, app switching, history, context, Stop and Termux data preservation. Physical-phone performance and battery behavior still need testing.\n\nAPK SHA-256: `'+manifest['apk_sha256']+'`\n\nSource: `'+manifest['source_commit']+'`\n'
+          (target/'prometheus-release-notes.md').write_text(notes)
+          print('Verified signed APK bytes:',len(apk))
+          PY
+      - name: Publish the direct APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag='prometheus-v1.0.0'
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$RUNNER_TEMP/Prometheus.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "$RUNNER_TEMP/Prometheus.apk" --repo "$GITHUB_REPOSITORY" --target '37c317ef481f22250baf6d8a63b717a13705a1a9' --title 'Prometheus 1.0.0' --notes-file "$RUNNER_TEMP/prometheus-release-notes.md" --latest=false
+          fi
