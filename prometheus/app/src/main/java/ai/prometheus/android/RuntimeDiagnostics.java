@@ -17,6 +17,8 @@ import org.json.JSONObject;
 final class RuntimeDiagnostics {
     static JSONObject capture(Context context, ChatRuntime runtime) throws Exception {
         JSONObject report = new JSONObject();
+        report.put("application_id",context.getPackageName());
+        report.put("queued_message",runtime.queued);
         report.put("app_version", context.getPackageManager().getPackageInfo(context.getPackageName(),0).versionName);
         report.put("pid", Process.myPid());
         report.put("phone", Build.MANUFACTURER + " " + Build.MODEL);

@@ -61,7 +61,6 @@ public final class MainActivity extends Activity {
                     String value=runtime.partial.isEmpty()?"… "+runtime.displayStatus():runtime.partial;
                     if(!value.contentEquals(streamingBubble.getText())){streamingBubble.setText(value);scrollBottom();}
                 }
-                if(ready && !busy && queuedPrompt!=null)deliverQueuedPrompt();
             }
             main.postDelayed(this,200);
         }
@@ -96,7 +95,6 @@ public final class MainActivity extends Activity {
     private boolean ready=false,busy=false;
     private long inferenceStartedAt=0L;
     private String latestStage="Idle";
-    private String queuedPrompt=null;
     private volatile boolean cancelRequested=false;
     private TextView streamingBubble,generationStateView;
     private String modelName="No model selected",activeTab="Chat";
@@ -156,12 +154,9 @@ public final class MainActivity extends Activity {
         if(modelFile!=null && sharedModelReady && sharedModelPath.equals(modelFile.getAbsolutePath())){
             ready=true;modelName=getPreferences(MODE_PRIVATE).getString("model_label",modelFile.getName());
         }
-        queuedPrompt=getSetting("queued_prompt","");
-        if(queuedPrompt.isEmpty())queuedPrompt=null;
         loadPetState();
         lastRenderedId=lastMessageId();
         render();
-        if(ready && queuedPrompt!=null)main.postDelayed(this::deliverQueuedPrompt,400);
 
         if(modelFile!=null && !ready && !runtime.loading)loadModel(modelFile);
     }
@@ -199,12 +194,6 @@ public final class MainActivity extends Activity {
             });
             root.requestApplyInsets();
         }else root.setFitsSystemWindows(true);
-    }
-    private void deliverQueuedPrompt(){
-        if(!ready || busy || queuedPrompt==null)return;
-        String next=queuedPrompt;queuedPrompt=null;saveSetting("queued_prompt","");
-        if(!"Chat".equals(activeTab)){activeTab="Chat";render();}
-        if(composer!=null){composer.setText(next);send();}
     }
     private void setBusy(boolean b,String message){
         busy=b;
@@ -463,7 +452,7 @@ public final class MainActivity extends Activity {
         if(composer==null)return;
         String q=composer.getText().toString().trim();if(q.isEmpty())return;
         if(!ready){
-            queuedPrompt=q;saveSetting("queued_prompt",q);
+            runtime.queue(q,profile,outputTokens);composer.setText("");draft="";saveSetting("chat_draft","");
             File stored=new File(new File(getFilesDir(),"models"),"prometheus.gguf");
             if(!busy && stored.isFile())loadModel(stored);
             notify(stored.isFile()?"Message queued until the model finishes loading.":"No model installed yet. Run prometheus-sync in Termux and reopen the app.");
@@ -471,7 +460,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if(busy||runtime.generating||runtime.loading){
-            queuedPrompt=q;saveSetting("queued_prompt",q);composer.setText("");
+            runtime.queue(q,profile,outputTokens);composer.setText("");draft="";saveSetting("chat_draft","");
             notify("Message saved. It will send when the active operation finishes.");
             if(status!=null)status.setText("● Message queued");
             return;

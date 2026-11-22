@@ -129,12 +129,27 @@ public class OfflineConversationTest {
         db.execSQL("INSERT OR IGNORE INTO book_files(title,sha256,path,indexed_at) VALUES('sentinel book','test-upgrade-sentinel','preserve/original.txt',1)");
         runtime.store.archiveChat();
         Intent open=new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        Activity first=instrumentation.startActivitySync(open);
-        await("Model did not load",()->runtime.ready,600);
-        assertTrue(new java.io.File(context.getFilesDir(),"models/prometheus.gguf").isFile());
+        java.io.File model=new java.io.File(context.getFilesDir(),"models/prometheus.gguf");
+        java.io.File deferred=new java.io.File(context.getFilesDir(),"models/prometheus.gguf.acceptance-loading");
+        assertTrue(model.isFile());
+        // Force a queued keyboard send before loading, without depending on model-load timing.
+        assertTrue(model.renameTo(deferred));
         long sentAt=SystemClock.elapsedRealtime();
-        send("Remember this exact code: cobalt-7319. Count from 1 to 30, separated by spaces.");
-        await("Native prompt progress did not arrive",()->runtime.engine.promptProgressReceived,120);
+        try {
+            instrumentation.startActivitySync(open);
+            send("Remember this exact code: cobalt-7319. Count from 1 to 30, separated by spaces.");
+            assertTrue("The loading message was not owned by the application worker",runtime.queued);
+        } finally {
+            assertTrue("The test model was not restored",deferred.renameTo(model));
+        }
+        instrumentation.runOnMainSync(()->runtime.load(model));
+        instrumentation.getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
+        await("Queued message did not start without the Chat screen",()->runtime.engine.promptProgressReceived,600);
+        assertTrue(runtime.generating);
+        assertTrue("Foreground hold was lost when loading handed off to generation",PrometheusWorkService.activeHolds()>0);
+        instrumentation.runOnMainSync(()->context.startActivity(open));
+        await("Could not reopen after queued handoff",()->foreground()!=null,30);
+        android.util.Log.i("PrometheusAcceptance","COLD_QUEUE_HOME_HANDOFF_PASS");
         long generationId=runtime.started;
         assertTrue(runtime.generating);
         page("Library");

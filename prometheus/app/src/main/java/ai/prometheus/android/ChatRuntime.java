@@ -19,7 +19,7 @@ final class ChatRuntime {
     final LlamaRuntime engine;
     private final Context context;
     private final ExecutorService work = Executors.newSingleThreadExecutor();
-    volatile boolean loading, generating, ready;
+    volatile boolean loading, generating, ready, queued;
     volatile String stage = "Idle", partial = "", path = "";
     volatile long started;
     private Future<?> load;
@@ -30,6 +30,7 @@ final class ChatRuntime {
         this.context = context;
         store = new ChatStore(context);
         engine = new LlamaRuntime(context);
+        queued = !store.setting("queued_prompt", "").isEmpty();
     }
     private void stage(String detail) {
         stage = detail;
@@ -43,6 +44,30 @@ final class ChatRuntime {
         String text = stage;
         if (generating && started > 0) text += " · " + Math.max(0, (System.currentTimeMillis()-started)/1000) + " s";
         return text;
+    }
+    synchronized void queue(String question, String profile, int output) {
+        store.putSetting("queued_profile", profile==null?"":profile);
+        store.putSetting("queued_tokens", Integer.toString(output));
+        store.putSetting("queued_prompt", question);
+        queued = true;
+        if (!generating) stage(loading ? "Loading model; message queued" : "Message queued");
+        startQueuedIfReady();
+    }
+    private synchronized void startQueuedIfReady() {
+        if (!ready || loading || generating || replacing || !queued) return;
+        String question = store.setting("queued_prompt", "");
+        if (question.isEmpty()) { queued=false; return; }
+        String profile = store.setting("queued_profile", store.setting("profile", ""));
+        int output = 192;
+        try { output=Integer.parseInt(store.setting("queued_tokens",store.setting("tokens","192"))); }
+        catch (NumberFormatException ignored) {}
+        try {
+            if (send(question, profile==null?"":profile, output)) {
+                store.putSetting("queued_prompt", ""); queued=false;
+            }
+        } catch (RuntimeException error) {
+            stage("ERROR: Could not start the saved message: " + error);
+        }
     }
     synchronized Future<?> load(File file) {
         if (ready && path.equals(file.getAbsolutePath()) && engine.isHealthy())
@@ -69,6 +94,8 @@ final class ChatRuntime {
                 Log.e("PrometheusRuntime", stage, error);
             } finally {
                 loading = false;
+                // Hand off before releasing the loading service hold, including while Home is open.
+                startQueuedIfReady();
                 if (wake != null && wake.isHeld()) wake.release();
                 PrometheusWorkService.end(context);
             }
@@ -132,13 +159,17 @@ final class ChatRuntime {
                 }
                 generating = false; started = 0;
                 ready = engine.isHealthy();
+                startQueuedIfReady();
                 if (wake != null && wake.isHeld()) wake.release();
                 PrometheusWorkService.end(context);
             }
         });
         return true;
     }
-    void stop() { engine.cancel(); }
+    synchronized void stop() {
+        if (loading && !generating) { store.putSetting("queued_prompt", ""); queued=false; }
+        engine.cancel();
+    }
     synchronized void beginModelReplacement() throws Exception {
         if (generating || loading || replacing) throw new IOException("Wait for the active model operation to finish before replacing it");
         replacing = true;
@@ -168,7 +199,7 @@ final class ChatRuntime {
                 } catch (Exception error) {
                     stage("ERROR: Model self-test failed: " + error.getMessage());
                     throw error;
-                } finally { generating = false; probing = false; }
+                } finally { generating = false; probing = false; startQueuedIfReady(); }
             });
         }
         return task.get(10, TimeUnit.MINUTES);
