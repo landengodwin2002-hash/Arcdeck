@@ -11,7 +11,7 @@ adb install -r "$tests"
 adb reverse tcp:18765 tcp:18765
 transfer() {
     adb shell input keyevent KEYCODE_HOME
-    python3 termux/prometheus-sync.py "$@" > "test-results/transfer-$1.txt" 2>&1 &
+    timeout 600 python3 termux/prometheus-sync.py "$@" > "test-results/transfer-$1.txt" 2>&1 &
     sender=$!
     python3 - <<'WAIT'
 import json,time,urllib.request
@@ -23,9 +23,26 @@ for _ in range(300):
 else:raise SystemExit('Termux transfer sender did not become ready')
 WAIT
     adb shell am start -W -n ai.prometheus.offline.nova/ai.prometheus.android.MainActivity
+    while kill -0 "$sender" 2>/dev/null; do
+        if ! adb shell pidof ai.prometheus.offline.nova >/dev/null; then
+            echo 'Nova exited during model maintenance; inspect captured native and Android logs.' >&2
+            kill "$sender" 2>/dev/null || true
+            wait "$sender" || true
+            return 1
+        fi
+        sleep 1
+    done
     wait "$sender"
 }
-trap 'adb logcat -d > test-results/logcat.txt; adb reverse --remove tcp:18765 >/dev/null 2>&1 || true' EXIT
+capture_diagnostics() {
+    local status=$?
+    adb logcat -d > test-results/logcat.txt || true
+    adb exec-out run-as ai.prometheus.offline.nova cat files/llama-runtime.log > test-results/native-runtime.txt || true
+    adb shell dumpsys meminfo ai.prometheus.offline.nova > test-results/memory.txt || true
+    adb reverse --remove tcp:18765 >/dev/null 2>&1 || true
+    return "$status"
+}
+trap capture_diagnostics EXIT
 transfer --model-only --model "$model"
 python3 - <<'BOOK'
 from pathlib import Path

@@ -29,6 +29,8 @@ public class OfflineConversationTest {
         long deadline = SystemClock.elapsedRealtime() + seconds * 1000;
         while (SystemClock.elapsedRealtime() < deadline) {
             if (condition.done()) return;
+            if (ChatRuntime.get(context).stage.startsWith("ERROR:"))
+                fail(why+"; "+ChatRuntime.get(context).stage+"\n"+ChatRuntime.get(context).engine.diagnostic());
             SystemClock.sleep(100);
         }
         fail(why + "; " + ChatRuntime.get(context).stage + "\n" + ChatRuntime.get(context).engine.diagnostic());
@@ -42,7 +44,7 @@ public class OfflineConversationTest {
         return activity.get();
     }
     private EditText composer(View view) {
-        if (view instanceof EditText && "Message Prometheus…".contentEquals(((EditText)view).getHint()))
+        if (view instanceof EditText && ((EditText)view).getHint()!=null && "Message Prometheus…".contentEquals(((EditText)view).getHint()))
             return (EditText)view;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup)view;
@@ -53,7 +55,7 @@ public class OfflineConversationTest {
         return null;
     }
     private View action(View view,String description) {
-        if (description.contentEquals(view.getContentDescription())) return view;
+        if (view.getContentDescription()!=null && description.contentEquals(view.getContentDescription())) return view;
         if (view instanceof ViewGroup) {
             ViewGroup group=(ViewGroup)view;
             for(int i=0;i<group.getChildCount();i++){
@@ -83,6 +85,11 @@ public class OfflineConversationTest {
             assertTrue(send.performClick());
         });
     }
+    private long replies(SQLiteDatabase db) {
+        try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM messages WHERE role='assistant'",null)){
+            c.moveToFirst();return c.getLong(0);
+        }
+    }
     private String lastAssistant(SQLiteDatabase db) {
         try(Cursor c=db.rawQuery("SELECT body FROM messages WHERE role='assistant' ORDER BY id DESC LIMIT 1",null)){
             return c.moveToFirst()?c.getString(0):"";
@@ -101,7 +108,7 @@ public class OfflineConversationTest {
         Activity first=instrumentation.startActivitySync(open);
         await("Model did not load",()->runtime.ready,600);
         assertTrue(new java.io.File(context.getFilesDir(),"models/prometheus.gguf").isFile());
-        send("Count from 1 to 30, separated by spaces.");
+        send("Remember this exact code: cobalt-7319. Count from 1 to 30, separated by spaces.");
         await("No streamed answer",()->runtime.generating&&!runtime.partial.trim().isEmpty(),600);
         String firstChunk=runtime.partial;
         assertFalse(firstChunk.contains("\uFFFD"));
@@ -140,10 +147,12 @@ public class OfflineConversationTest {
         try(Cursor c=db.rawQuery("SELECT path FROM book_files WHERE sha256='test-upgrade-sentinel'",null)){assertTrue(c.moveToFirst());assertEquals("preserve/original.txt",c.getString(0));}
 
         // A second turn proves this is an ongoing conversation, not just a one-shot probe.
-        send("What was the first number you just counted? Reply with only that number.");
+        long beforeFollowup=replies(db);
+        send("What exact code did I give you? Reply with only that code.");
         await("Follow-up was not saved",()->runtime.generating,10);
         await("Follow-up did not complete",()->!runtime.generating,600);
-        assertTrue("Conversation context was lost: "+lastAssistant(db),lastAssistant(db).trim().contains("1"));
+        assertEquals(beforeFollowup+1,replies(db));
+        assertTrue("Conversation context was lost: "+lastAssistant(db),lastAssistant(db).toLowerCase().contains("cobalt-7319"));
 
         // Cancellation must leave the application usable for another real turn.
         send("Write a very long numbered list of facts about the ocean.");
@@ -152,9 +161,11 @@ public class OfflineConversationTest {
         instrumentation.runOnMainSync(()->action(current.getWindow().getDecorView(),"Stop generation").performClick());
         await("Stop did not complete",()->!runtime.generating,60);
         assertTrue(runtime.ready);
+        long beforeRestartedReply=replies(db);
         send("Say hello.");
         await("A message after Stop was rejected",()->runtime.generating,10);
         await("A message after Stop failed",()->!runtime.generating,600);
+        assertEquals("No fresh reply was saved after Stop",beforeRestartedReply+1,replies(db));
         assertFalse(lastAssistant(db).trim().isEmpty());
         android.util.Log.i("PrometheusAcceptance","REAL_MODEL_STREAM_BACKGROUND_RECREATE_FOLLOWUP_STOP_PASS");
     }
