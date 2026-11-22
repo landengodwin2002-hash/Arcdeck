@@ -157,7 +157,7 @@ def main():
         model=get_model(args.model)
         print('Selected abliterated model:',model or '(none found)')
         print('Termux library source files:',sum(1 for _ in scan_books(args.include)))
-        print('Native app: Prometheus Nova (offline model remains private inside the APK)')
+        print('Native app: Prometheus (offline model remains private inside the APK)')
         def rows_count(location,query):
             try:
                 with sqlite3.connect(f'file:{location}?mode=ro',uri=True) as conn:
@@ -251,7 +251,7 @@ def main():
         return 2
     t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':0.2},daemon=True)
     t.start()
-    print('\nLOCAL TRANSFER READY. Open Prometheus Nova now.' if not args.probe else '\nNATIVE MODEL PROBE READY. Open Prometheus Nova to start the on-device test.',flush=True)
+    print('\nLOCAL TRANSFER READY. Open Prometheus now.' if not args.probe else '\nNATIVE MODEL PROBE READY. Open Prometheus to start the on-device test.',flush=True)
     print('It will automatically import when you return to it. No file picking or pairing.',flush=True)
     print('Do not close Termux until it reports completion. Works without internet.',flush=True)
     try:

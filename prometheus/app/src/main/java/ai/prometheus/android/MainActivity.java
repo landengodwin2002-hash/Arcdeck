@@ -328,7 +328,7 @@ public final class MainActivity extends Activity {
         LinearLayout root=column();root.setBackgroundColor(BG);root.setFocusableInTouchMode(true);setContentView(root);installSafeArea(root);
         LinearLayout header=row();pad(header,10,5,10,5);root.addView(header,lp(-1,67));
         ImageView mark=new ImageView(this);mark.setImageResource(R.drawable.prometheus_mark);
-        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);mark.setContentDescription("Prometheus Nova symbol");
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);mark.setContentDescription("Prometheus symbol");
         mark.setOnClickListener(v->showPetDialog());header.addView(mark,lp(50,50));
         LinearLayout title=column();pad(title,10,0,0,0);
         header.addView(title,new LinearLayout.LayoutParams(0,-2,1));

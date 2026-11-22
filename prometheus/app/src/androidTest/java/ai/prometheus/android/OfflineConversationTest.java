@@ -115,7 +115,7 @@ public class OfflineConversationTest {
     @Test public void realModelStreamsAndSurvivesScreenRecreationAndHome() throws Exception {
         SQLiteDatabase db=ChatStore.open(context);
         ChatRuntime runtime=ChatRuntime.get(context);
-        assertEquals("ai.prometheus.offline.nova",context.getPackageName());
+        assertEquals("ai.prometheus.offline.chat",context.getPackageName());
         // These are the same tables/paths as the installed Nova application.
         db.execSQL("INSERT INTO memory(kind,body) VALUES('test','migration sentinel')");
         db.execSQL("INSERT OR IGNORE INTO book_files(title,sha256,path,indexed_at) VALUES('sentinel book','test-upgrade-sentinel','preserve/original.txt',1)");

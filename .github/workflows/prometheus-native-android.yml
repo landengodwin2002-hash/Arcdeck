@@ -1,4 +1,4 @@
-name: Prometheus Nova offline conversation
+name: Prometheus offline conversation
 on:
   push:
     branches: [prometheus-native-app]
@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: prometheus-nova-${{ github.ref }}
+  group: prometheus-offline-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   verify:
@@ -87,41 +87,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Prometheus-Nova-validation
+          name: Prometheus-validation
           path: |
             prometheus/test-results/
             prometheus/app/build/reports/tests/
             prometheus/app/build/reports/lint-results-debug.html
           if-no-files-found: warn
-      - name: Prepare original Nova signing key if available
-        id: signing
-        env:
-          NOVA_KEY: ${{ secrets.PROMETHEUS_SIGNING_KEY_B64 }}
-        run: |
-          if [ -z "$NOVA_KEY" ]; then
-            echo 'ready=false' >> "$GITHUB_OUTPUT"
-            echo 'Phone release blocked: original Nova signing key is absent. Runtime checks are independent of this release gate.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            umask 077
-            printf '%s' "$NOVA_KEY" | base64 --decode > "$RUNNER_TEMP/nova.jks"
-            echo 'ready=true' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build and verify the single phone update APK
-        if: steps.signing.outputs.ready == 'true'
-        working-directory: prometheus
-        env:
-          PROMETHEUS_KEYSTORE: ${{ runner.temp }}/nova.jks
-          PROMETHEUS_KEYSTORE_PASSWORD: ${{ secrets.PROMETHEUS_KEYSTORE_PASSWORD }}
-          PROMETHEUS_KEY_ALIAS: ${{ secrets.PROMETHEUS_KEY_ALIAS }}
-          PROMETHEUS_KEY_PASSWORD: ${{ secrets.PROMETHEUS_KEY_PASSWORD }}
-        run: |
-          gradle --no-daemon --max-workers=3 :app:assembleRelease
-          python3 scripts/check_signing.py --apk app/build/outputs/apk/release/app-release.apk --apksigner "$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          cp app/build/outputs/apk/release/app-release.apk Prometheus-Nova.apk
-      - name: Publish only the compatible phone update
-        if: steps.signing.outputs.ready == 'true'
+      - name: Save the tested ARM64 package for permanent local signing
         uses: actions/upload-artifact@v4
         with:
-          name: Prometheus-Nova
-          path: prometheus/Prometheus-Nova.apk
+          name: Prometheus-ARM64-unsigned
+          path: |
+            prometheus/app/build/outputs/apk/release/app-release-unsigned.apk
+            prometheus/app/build/outputs/apk/release/output-metadata.json
           if-no-files-found: error

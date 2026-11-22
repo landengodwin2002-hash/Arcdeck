@@ -5,11 +5,11 @@ android {
     compileSdk 35
     ndkVersion "27.2.12479018"
     defaultConfig {
-        applicationId 'ai.prometheus.offline.nova'
+        applicationId 'ai.prometheus.offline.chat'
         minSdk 26
         targetSdk 35
-        versionCode 7
-        versionName '1.7.0-nova-offline'
+        versionCode 1
+        versionName '1.0.0'
         ndk { abiFilters.addAll(targetAbis.toList()) }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         externalNativeBuild { cmake {
@@ -25,7 +25,7 @@ android {
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }
     signingConfigs {
         if (System.getenv('PROMETHEUS_KEYSTORE')) {
-            nova {
+            prometheus {
                 storeFile file(System.getenv('PROMETHEUS_KEYSTORE'))
                 storePassword System.getenv('PROMETHEUS_KEYSTORE_PASSWORD')
                 keyAlias System.getenv('PROMETHEUS_KEY_ALIAS')
@@ -36,7 +36,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            if (System.getenv('PROMETHEUS_KEYSTORE')) signingConfig signingConfigs.nova
+            if (System.getenv('PROMETHEUS_KEYSTORE')) signingConfig signingConfigs.prometheus
         }
     }
 }
