@@ -19,3 +19,10 @@ state and Android process-exit reasons. Database/model/book paths are unchanged.
 The phone's native stall cause is not yet confirmed. A copied phone diagnostic
 is still required; these changes must not be declared a proven physical-phone
 fix merely because compilation or another emulator run succeeds.
+
+A further confirmed lifecycle defect was the Activity-owned queued-prompt handler.
+Messages sent before the model was ready could wait for a resumed Chat screen.
+Queue persistence and the load/generation handoff now live in the application
+worker; it retains the foreground-service hold while starting the queued reply.
+The Android 16 regression queues actual keyboard input before loading the GGUF,
+presses Home and requires native progress without returning to the Chat screen.
