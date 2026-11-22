@@ -61,8 +61,7 @@ final class ChatStore {
     }
     JSONArray history(String profile) throws Exception {
         JSONArray messages = new JSONArray();
-        String system = "You are Prometheus, a local offline assistant. Answer directly in readable conversational text. "
-                + "Do not claim to perform actions you have not performed.";
+        String system = "You are Prometheus, an offline assistant. Answer directly. Do not claim actions you have not performed.";
         if (!profile.trim().isEmpty()) system += "\n" + profile;
         messages.put(new JSONObject().put("role", "system").put("content", system));
         String boundary = setting("conversation_start", "0");

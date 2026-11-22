@@ -8,18 +8,21 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.IBinder;
 import android.content.Context;
-import java.util.concurrent.atomic.AtomicInteger;
+
 
 public final class PrometheusWorkService extends Service {
-    private static final AtomicInteger holds=new AtomicInteger();
-    static void begin(Context context,String reason){
-        if(holds.incrementAndGet()!=1)return;
+    private static int holds;
+    private static volatile boolean running;
+    static synchronized int activeHolds(){return holds;}
+    static boolean isRunning(){return running;}
+    static synchronized void begin(Context context,String reason){
+        if(++holds!=1)return;
         try{context.startForegroundService(new Intent(context,PrometheusWorkService.class).putExtra("reason",reason));}
-        catch(RuntimeException error){holds.decrementAndGet();throw error;}
+        catch(RuntimeException error){holds--;throw error;}
     }
-    static void end(Context context){
-        int count=holds.decrementAndGet();
-        if(count<=0){holds.set(0);context.stopService(new Intent(context,PrometheusWorkService.class));}
+    static synchronized void end(Context context){
+        if(holds>0)holds--;
+        if(holds==0)context.stopService(new Intent(context,PrometheusWorkService.class));
     }
     private static final String CHANNEL="prometheus_background_ai";
     @Override public void onCreate(){
@@ -44,8 +47,9 @@ public final class PrometheusWorkService extends Service {
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build();
-        startForeground(2155,n);
+        startForeground(2155,n);running=true;
         return START_NOT_STICKY;
     }
+    @Override public void onDestroy(){running=false;super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

@@ -18,7 +18,8 @@ import org.json.JSONObject;
  */
 final class LlamaRuntime {
     static final String REVISION = "afe77e18fadc2e673c6a6299495a443e17378ce4";
-    static final int CONTEXT = 3072;
+    static final int CONTEXT = 2048;
+    static final int PROMPT_BUDGET = 1024;
     private static native int serve(String[] args);
     private static native void terminate();
 
@@ -34,6 +35,8 @@ final class LlamaRuntime {
     private File model;
     private volatile HttpURLConnection activeRequest;
     private volatile boolean healthy;
+    volatile boolean promptProgressReceived;
+    volatile int promptTokens, processedTokens;
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final File log;
 
@@ -58,7 +61,7 @@ final class LlamaRuntime {
         String[] args = {"prometheus", "--model", file.getAbsolutePath(),
                 "--host", "127.0.0.1", "--port", Integer.toString(port), "--api-key", key,
                 "--ctx-size", Integer.toString(CONTEXT), "--parallel", "1",
-                "--batch-size", "128", "--ubatch-size", "128",
+                "--batch-size", "32", "--ubatch-size", "32",
                 "--threads", Integer.toString(threads), "--threads-batch", Integer.toString(threads),
                 "--n-gpu-layers", "0", "--cache-ram", "0", "--no-warmup",
                 "--jinja", "--reasoning", "off", "--no-webui",
@@ -145,7 +148,7 @@ final class LlamaRuntime {
     private JSONObject payload(JSONArray messages, int output) throws Exception {
         return new JSONObject().put("messages", messages).put("stream", true)
                 .put("max_tokens", output).put("temperature", 0.65).put("top_p", 0.92)
-                .put("reasoning_effort", "none")
+                .put("reasoning_effort", "none").put("return_progress", true)
                 .put("chat_template_kwargs", new JSONObject().put("enable_thinking", false));
     }
     private JSONArray fit(JSONArray history, int output) throws Exception {
@@ -156,7 +159,8 @@ final class LlamaRuntime {
             JSONObject tokens = json("/tokenize", new JSONObject().put("content", prompt)
                     .put("add_special", true).put("parse_special", true), 30_000);
             int count = tokens.getJSONArray("tokens").length();
-            if (count + output + 32 <= CONTEXT) return messages;
+            promptTokens = count; processedTokens = 0;
+            if (count + output + 32 <= CONTEXT && (count <= PROMPT_BUDGET || messages.length() <= 2)) return messages;
             // Remove oldest complete turns. The database retains the full text.
             if (messages.length() <= 2) throw new IOException(
                     "This message is too long for the phone's " + CONTEXT + "-token context. Shorten it and try again.");
@@ -168,6 +172,7 @@ final class LlamaRuntime {
     }
     void generate(JSONArray history, int output, Stream stream) throws Exception {
         if (!isHealthy()) throw new IOException("The offline model is not ready. " + diagnostic());
+        promptProgressReceived = false;
         stream.stage("Reading conversation on device…");
         JSONArray messages = fit(history, output);
         if (cancelled.get()) return;
@@ -181,19 +186,30 @@ final class LlamaRuntime {
             post(c, payload(messages, output));
             int code = c.getResponseCode();
             if (code != 200) throw new IOException("Local runtime HTTP " + code + ": " + read(c.getErrorStream(), 32_000));
-            stream.stage("Generating answer on device…");
+            stream.stage("Processing conversation on device…");
+            final boolean[] visible = {false};
             SseReader.read(c.getInputStream(), data -> {
                 if (cancelled.get()) return false;
                 if ("[DONE]".equals(data)) return false;
                 JSONObject event = new JSONObject(data);
                 if (event.has("error")) throw new IOException(event.get("error").toString());
+                JSONObject progress = event.optJSONObject("prompt_progress");
+                if (progress != null && !visible[0]) {
+                    int total = progress.optInt("total", 0);
+                    int processed = Math.min(total, progress.optInt("processed", 0));
+                    promptProgressReceived = true; promptTokens = total; processedTokens = processed;
+                    if (total > 0) stream.stage("Reading context: " + processed + "/" + total + " tokens");
+                }
                 JSONArray choices = event.optJSONArray("choices");
                 if (choices != null && choices.length() > 0) {
                     JSONObject delta = choices.getJSONObject(0).optJSONObject("delta");
                     // Upstream parses thought/tool tokens. Only visible answer text is displayed.
                     if (delta != null && !delta.isNull("content")) {
                         String text = delta.optString("content", "");
-                        if (!text.isEmpty()) stream.content(text);
+                        if (!text.isEmpty()) {
+                            if (!visible[0]) { visible[0] = true; stream.stage("Streaming reply on device…"); }
+                            stream.content(text);
+                        }
                     }
                 }
                 return true;
@@ -202,7 +218,7 @@ final class LlamaRuntime {
     }
     String diagnostic() {
         try (RandomAccessFile in = new RandomAccessFile(log, "r")) {
-            long start = Math.max(0, in.length() - 6000); in.seek(start);
+            long start = Math.max(0, in.length() - 4000); in.seek(start);
             byte[] bytes = new byte[(int) (in.length() - start)]; in.readFully(bytes);
             return new String(bytes, StandardCharsets.UTF_8).replaceAll("(?i)Bearer [a-f0-9]{64}", "Bearer [private]");
         } catch (IOException ex) { return "No native log available yet."; }

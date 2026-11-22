@@ -101,6 +101,14 @@ public class OfflineConversationTest {
             assertTrue(send.performClick());
         });
     }
+    private void page(String name) {
+        Activity current=foreground();assertNotNull(current);
+        instrumentation.runOnMainSync(()->{
+            View button=action(current.getWindow().getDecorView(),"Open "+name+" page");
+            assertNotNull("Missing navigation button for "+name,button);assertTrue(button.performClick());
+        });
+        instrumentation.waitForIdleSync();
+    }
     private long replies(SQLiteDatabase db) {
         try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM messages WHERE role='assistant'",null)){
             c.moveToFirst();return c.getLong(0);
@@ -126,6 +134,25 @@ public class OfflineConversationTest {
         assertTrue(new java.io.File(context.getFilesDir(),"models/prometheus.gguf").isFile());
         long sentAt=SystemClock.elapsedRealtime();
         send("Remember this exact code: cobalt-7319. Count from 1 to 30, separated by spaces.");
+        await("Native prompt progress did not arrive",()->runtime.engine.promptProgressReceived,120);
+        long generationId=runtime.started;
+        assertTrue(runtime.generating);
+        page("Library");
+        Activity library=foreground();
+        instrumentation.runOnMainSync(()->{
+            assertTrue("Imported book title is absent from Library",visibleText(library.getWindow().getDecorView(),"Legacy original"));
+            assertTrue("Indexed Termux book is absent from Library",visibleText(library.getWindow().getDecorView(),"termux-original.txt"));
+        });
+        page("Settings");page("Projects");page("Chat");
+        assertEquals("Page switching restarted the reply",generationId,runtime.started);
+        assertTrue("Page switching stopped generation",runtime.generating);
+        instrumentation.getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
+        SystemClock.sleep(1000);
+        instrumentation.runOnMainSync(()->context.startActivity(open));
+        await("Could not return during prompt processing",()->foreground()!=null,30);
+        assertEquals(generationId,runtime.started);
+        assertTrue(runtime.generating);
+        android.util.Log.i("PrometheusAcceptance","PREFILL_TABS_HOME_NO_RESTART_PASS");
         await("No streamed answer",()->runtime.generating&&!runtime.partial.trim().isEmpty(),600);
         String firstChunk=runtime.partial;
         android.util.Log.i("PrometheusAcceptance","FIRST_CONTENT_MS="+(SystemClock.elapsedRealtime()-sentAt));
@@ -148,7 +175,12 @@ public class OfflineConversationTest {
             assertTrue("Streamed content did not appear in the chat",visibleText(writing.getWindow().getDecorView(),firstChunk));
             assertEquals("draft survives",input.getText().toString());
         });
-        instrumentation.runOnMainSync(first::recreate);
+        page("Library");page("Settings");page("Chat");
+        assertEquals("Page switching lost the active generation",generationId,runtime.started);
+        assertTrue(runtime.generating);
+        Activity afterPages=foreground();
+        instrumentation.runOnMainSync(()->assertEquals("draft survives",composer(afterPages.getWindow().getDecorView()).getText().toString()));
+        instrumentation.runOnMainSync(afterPages::recreate);
         instrumentation.getUiAutomation().executeShellCommand("input keyevent KEYCODE_HOME").close();
         await("Background reply did not finish",()->!runtime.generating,900);
         String answer=lastAssistant(db);

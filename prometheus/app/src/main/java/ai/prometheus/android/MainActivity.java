@@ -55,9 +55,10 @@ public final class MainActivity extends Activity {
                     if("Chat".equals(activeTab) && thread!=null){refreshRecoveryPanel();refreshThread();}
                     if(petView!=null)petView.setStats(petHunger,petMood,petTrust,busy);
                 }
-                if(status!=null)status.setText("● "+runtime.stage);
+                if(status!=null)status.setText("● "+runtime.displayStatus());
                 if("Chat".equals(activeTab) && runtime.generating && streamingBubble!=null){
-                    String value=runtime.partial;
+                    if(generationStateView!=null)generationStateView.setText("● "+runtime.displayStatus());
+                    String value=runtime.partial.isEmpty()?"… "+runtime.displayStatus():runtime.partial;
                     if(!value.contentEquals(streamingBubble.getText())){streamingBubble.setText(value);scrollBottom();}
                 }
                 if(ready && !busy && queuedPrompt!=null)deliverQueuedPrompt();
@@ -81,7 +82,7 @@ public final class MainActivity extends Activity {
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ArrayList<String[]> messages=new ArrayList<>();
     private SQLiteDatabase db;
-    private LinearLayout page,thread,toolbar,recoveryPanel;
+    private LinearLayout page,thread,toolbar,recoveryPanel,libraryList;
     private ScrollView scroller;
     private EditText composer;
     private TextView status,bookCount;
@@ -97,9 +98,9 @@ public final class MainActivity extends Activity {
     private String latestStage="Idle";
     private String queuedPrompt=null;
     private volatile boolean cancelRequested=false;
-    private TextView streamingBubble;
+    private TextView streamingBubble,generationStateView;
     private String modelName="No model selected",activeTab="Chat";
-    private String profile="Reply naturally and directly. Understand the intended meaning of abstract statements; ask for clarification only when required. Avoid dumping raw book passages. Cite sources if consulted. Accept corrections and adapt future responses.";
+    private String profile="";
     private File modelFile;
     private final java.util.concurrent.atomic.AtomicBoolean termuxSyncRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
     private int selectedBooks=0;
@@ -311,9 +312,10 @@ public final class MainActivity extends Activity {
         }).show();
     }
     private void showDiagnostics(){
-        String mode=ready?"Ready":busy?"Busy / loading":"No model ready";
-        String f=modelFile==null?"None":modelFile.getName()+" ("+(modelFile.length()/1024/1024)+" MB)";
-        String report="Runtime: llama.cpp "+LlamaRuntime.REVISION+"\nModel: "+mode+"\nFile: "+f+"\nCurrent stage: "+latestStage+"\nElapsed: "+(inferenceStartedAt>0?(System.currentTimeMillis()-inferenceStartedAt)/1000+" s":"Not generating")+"\nLast inference stage: "+lastInferenceStatus+"\nSaved: "+getSetting("last_inference","None")+"\n\nIf stuck during prompt processing, it may be slow CPU inference. If you see ERROR, copy that exact message.";
+        String captured;
+        try{captured=RuntimeDiagnostics.capture(this,runtime).toString(2);}
+        catch(Exception error){captured="Diagnostic capture failed: "+error+"\n"+runtime.engine.diagnostic();}
+        final String report=captured;
         new AlertDialog.Builder(this).setTitle("Native engine diagnostics").setMessage(report)
             .setNeutralButton("Copy",(d,w)->{
                 android.content.ClipboardManager cb=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
@@ -322,6 +324,8 @@ public final class MainActivity extends Activity {
             }).setPositiveButton("Close",null).show();
     }
     private void render(){
+        sharedGenerating=runtime.generating;sharedModelLoading=runtime.loading;
+        ready=runtime.ready && runtime.engine.isHealthy();busy=runtime.generating||runtime.loading;
         boolean editing=composer!=null&&composer.hasFocus();
         int selection=composer==null?0:composer.getSelectionStart();
         if(composer!=null){draft=composer.getText().toString();saveSetting("chat_draft",draft);composer=null;}
@@ -334,8 +338,8 @@ public final class MainActivity extends Activity {
         header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
         TextView titleText=text("PROMETHEUS",17,FORE,true);
         titleText.setLetterSpacing(.07f);title.addView(titleText);
-        status=text(ready?"● Model loaded locally":busy?"● Working locally…":"○ Import offline GGUF",12,ready?0xff59eab4:MUTED,false);
-        status.setSingleLine(true);status.setEllipsize(android.text.TextUtils.TruncateAt.END);title.addView(status);
+        status=text("● "+runtime.displayStatus(),12,ready?0xff59eab4:MUTED,false);
+        status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);title.addView(status);
         petView=new PrometheusPetView(this);petView.setStats(petHunger,petMood,petTrust,busy);
         petView.setContentDescription("Open interactive companion · Feed or praise");
         petView.setOnClickListener(v->showPetDialog());header.addView(petView,lp(44,44));
@@ -354,6 +358,7 @@ public final class MainActivity extends Activity {
         for(String[] nav:new String[][]{{"Chat","◉"},{"Library","▤"},{"Projects","▣"},{"Settings","⚙"}}){
             boolean selected=activeTab.equals(nav[0]);
             Button tab=button(nav[1]+"\n"+nav[0],()->{if(!activeTab.equals(nav[0])){activeTab=nav[0];render();}});
+            tab.setContentDescription("Open "+nav[0]+" page");
             tab.setTextSize(11);tab.setAllCaps(false);
             tab.setTextColor(selected?MINT:MUTED);
             if(selected){
@@ -407,12 +412,13 @@ public final class MainActivity extends Activity {
     }
     private void refreshRecoveryPanel(){
         if(recoveryPanel==null)return;
-        recoveryPanel.removeAllViews();
+        recoveryPanel.removeAllViews();generationStateView=null;
         try(Cursor c=db.rawQuery("SELECT prompt,partial,stage FROM generation_state WHERE id=1",null)){
             if(c.moveToFirst()){
                 final String question=c.getString(0), partial=c.getString(1), phase=c.getString(2);
                 TextView state=text(sharedGenerating?"● Generating in background: "+phase:
                     "● Interrupted reply saved. You can retry it.",13,MINT,false);
+                generationStateView=state;
                 pad(state,5,4,5,6);recoveryPanel.addView(state,lp(-1,-2));
                 if(!sharedGenerating){
                     if(partial!=null && !partial.isEmpty()){
@@ -435,7 +441,7 @@ public final class MainActivity extends Activity {
             empty.setGravity(Gravity.CENTER);pad(empty,18,76,18,25);thread.addView(empty,lp(-1,-2));
         }else for(String[] m:messages)addBubble(m[0],m[1]);
         if(sharedGenerating){
-            streamingBubble=addBubble("assistant",runtime.partial);
+            streamingBubble=addBubble("assistant",runtime.partial.isEmpty()?"… "+runtime.displayStatus():runtime.partial);
         }else streamingBubble=null;
         scrollBottom();
     }
@@ -517,6 +523,8 @@ public final class MainActivity extends Activity {
         TextView terminalHelp=text("Book and memory setup is controlled entirely from Termux. Run prometheus-sync, then return to this app. For books only: prometheus-sync --books-only. Original files are preserved.",16,MINT,false);
         pad(terminalHelp,8,16,8,20);terminalHelp.setBackground(bg(SURFACE,14,BORDER));page.addView(terminalHelp);
         bookCount=text("",14,MINT,false);pad(bookCount,5,17,0,15);page.addView(bookCount);
+        ScrollView books=new ScrollView(this);libraryList=column();books.addView(libraryList);
+        page.addView(books,new LinearLayout.LayoutParams(-1,0,1));
         updateBookCount();
         TextView help=text("Imported originals are archived privately on this phone. Book importing remains accessible through Termux. Scanned PDFs require OCR.",14,MUTED,false);
         page.addView(help);
@@ -528,6 +536,28 @@ public final class MainActivity extends Activity {
             if(c.moveToFirst()){sources=c.getInt(0);passages=c.getInt(1);}
         }
         bookCount.setText(archived+" archived originals · "+sources+" searchable sources\n"+passages+" searchable passages (including imported Termux knowledge)");
+        if(libraryList==null)return;
+        libraryList.removeAllViews();
+        if(archived==0 && sources==0){
+            TextView missing=text("No books transferred yet. In Termux run prometheus-sync, then return here to copy books and indexed knowledge.",15,MUTED,false);
+            pad(missing,5,10,5,12);libraryList.addView(missing,lp(-1,-2));
+        }
+        try(Cursor c=db.rawQuery("SELECT title FROM book_files ORDER BY title COLLATE NOCASE LIMIT 200",null)){
+            while(c.moveToNext()){
+                TextView book=text(c.getString(0)+"\nOriginal file archived",15,FORE,false);
+                pad(book,8,9,8,9);libraryList.addView(book,lp(-1,-2));
+            }
+        }
+        try(Cursor c=db.rawQuery("SELECT book,COUNT(*) FROM passages GROUP BY book ORDER BY book COLLATE NOCASE LIMIT 200",null)){
+            while(c.moveToNext()){
+                TextView book=text(c.getString(0)+"\n"+c.getInt(1)+" indexed passages",15,MINT,false);
+                pad(book,8,9,8,9);libraryList.addView(book,lp(-1,-2));
+            }
+        }
+        String summary=getSetting("last_sync_summary","");
+        String failures=getSetting("last_sync_errors","");
+        if(!summary.isEmpty())libraryList.addView(text(summary,13,MUTED,false),lp(-1,-2));
+        if(!failures.isEmpty())libraryList.addView(text("Import errors: "+failures,13,PINK,false),lp(-1,-2));
     }
     private void selectBooks(){
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");
@@ -912,11 +942,10 @@ public final class MainActivity extends Activity {
                     db.setTransactionSuccessful();
                 }finally{db.endTransaction();}
                 final int count=imported;
-                runUI(()->{messages.clear();
-                    try(Cursor c=db.rawQuery("SELECT role,body FROM (SELECT id,role,body FROM messages ORDER BY id DESC LIMIT 100) ORDER BY id ASC",null)){
-                        while(c.moveToNext())messages.add(new String[]{c.getString(0),c.getString(1)});
-                    }
-                    setBusy(false,ready?"● Model ready":"● Choose a model");render();
+                runUI(()->{
+                    loadSavedMessages();lastRenderedId=lastMessageId();
+                    if("Chat".equals(activeTab)){refreshRecoveryPanel();refreshThread();}
+                    updateBookCount();
                     notify("Restored "+count+" knowledge and chat records");});
                 return true;
             }catch(Exception ex){String err=ex.getMessage();runUI(()->{setBusy(false,"● Migration failed");notify("Migration: "+err);});return false;}
@@ -991,14 +1020,10 @@ public final class MainActivity extends Activity {
             conn=syncConnection("/diagnostics",1000,3000);
             conn.setRequestMethod("POST");conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type","application/json");
-            JSONObject report=new JSONObject();
-            report.put("model_ready",runtime.ready&&runtime.engine.isHealthy());
-            report.put("model_name",modelName);
-            report.put("last_inference",getSetting("last_inference","Not yet attempted"));
+            JSONObject report=RuntimeDiagnostics.capture(this,runtime);
             report.put("timestamp",System.currentTimeMillis());
-            report.put("runtime_revision",LlamaRuntime.REVISION);
-            report.put("native_log_tail",runtime.engine.diagnostic());
             byte[] body=report.toString().getBytes(StandardCharsets.UTF_8);
+            if(body.length>7800){report.put("native_log_tail","Log trimmed to fit the existing Termux receiver. Use Diagnostics → Copy in the app.");body=report.toString().getBytes(StandardCharsets.UTF_8);}
             conn.setFixedLengthStreamingMode(body.length);
             try(OutputStream out=conn.getOutputStream()){out.write(body);}
             conn.getResponseCode();
@@ -1064,6 +1089,7 @@ public final class MainActivity extends Activity {
             if(items.length()>3000)throw new IOException("Too many transfer files");
             runUI(()->{if(status!=null)status.setText("● Termux sync active — model and books are being checked");});
             int books=0,memories=0,models=0,failures=0;
+            StringBuilder syncErrors=new StringBuilder();
             for(int i=0;i<items.length();i++){
                 JSONObject item=items.getJSONObject(i);
                 String kind=item.optString("kind"),filename=item.optString("name","");
@@ -1103,7 +1129,10 @@ public final class MainActivity extends Activity {
                         try{indexBook(Uri.fromFile(stage));books++;}
                         finally{stage.delete();stageDir.delete();}
                     }
-                }catch(Exception e){failures++;android.util.Log.e("PrometheusSync","Item skipped: "+filename,e);}
+                }catch(Exception e){
+                    failures++;android.util.Log.e("PrometheusSync","Item skipped: "+filename,e);
+                    if(syncErrors.length()<700)syncErrors.append(filename).append(": ").append(e.getMessage()).append("\n");
+                }
             }
             if(manifest.optBoolean("probe",false)){
                 String testAnswer;
@@ -1122,6 +1151,8 @@ public final class MainActivity extends Activity {
                 syncFinish("{\"success\":"+testOk+",\"probe\":"+JSONObject.quote(testAnswer)+"}");
                 return;
             }
+            saveSetting("last_sync_summary",models+" models, "+books+" books, "+memories+" saved-data imports; "+failures+" errors");
+            saveSetting("last_sync_errors",syncErrors.toString());
             final int restoredBooks=books,restoredModels=models,restoredMem=memories,errors=failures;
             syncFinish("{\"success\":"+(failures==0)+",\"models\":"+models+",\"books\":"+books+",\"migrations\":"+memories+",\"errors\":"+failures+"}");
             runUI(()->{updateBookCount();if(!sharedGenerating && !sharedModelLoading)setBusy(false,ready?"● Model ready":"● Preparing model…");

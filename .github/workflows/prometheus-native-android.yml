@@ -68,7 +68,7 @@ jobs:
         env:
           PROMETHEUS_TEST_MODEL: ${{ runner.temp }}/prometheus-model/existing-4b-abliterated.gguf
         with:
-          api-level: 35
+          api-level: 36
           arch: x86_64
           target: google_apis
           profile: pixel_5

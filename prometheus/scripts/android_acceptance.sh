@@ -77,6 +77,7 @@ adb shell am instrument -w -r ai.prometheus.offline.chat.test/androidx.test.runn
 adb logcat -d > test-results/logcat.txt
 grep -q 'OK (1 test)' test-results/instrumentation.txt
 grep -q 'REAL_MODEL_STREAM_BACKGROUND_RECREATE_FOLLOWUP_STOP_PASS' test-results/logcat.txt
+grep -q 'PREFILL_TABS_HOME_NO_RESTART_PASS' test-results/logcat.txt
 # A full process restart must still expose the committed conversation and original data.
 adb shell am force-stop ai.prometheus.offline.chat
 adb shell am start -W -n ai.prometheus.offline.chat/ai.prometheus.android.MainActivity

@@ -3,7 +3,7 @@
 One offline Android chat application, using the existing abliterated 4B GGUF and Termux maintenance data.
 
 - Package: `ai.prometheus.offline.chat`
-- Version: `1.0.0`
+- Version: `1.0.1`
 - Interface: existing Nova layout, colors and icon, labeled Prometheus
 - Runtime: unmodified llama.cpp `afe77e18fadc2e673c6a6299495a443e17378ce4`
 - Stable release certificate: `scripts/release-certificate.sha256`
@@ -18,11 +18,13 @@ Android application.
 Install the signed `Prometheus.apk`. In the existing Termux setup, run:
 
 ```sh
-prometheus-sync --model-only
+prometheus-sync
 ```
 
-Open the new **Prometheus** app, allow the existing GGUF to copy and load, and send
-a message. The conversation then runs inside the APK without Termux or internet.
+Open **Prometheus** and allow the existing GGUF, saved data and books to transfer.
+The Library page lists transferred originals and indexed sources, plus the last
+transfer result. For a model-only transfer, use `prometheus-sync --model-only`;
+that command deliberately does not send books or saved data. Then send a message. The conversation then runs inside the APK without Termux or internet.
 The app uses the same transfer protocol as the installed maintenance command.
 No new model download is required when the existing GGUF is available in Termux.
 
@@ -82,3 +84,11 @@ credentials or generate a replacement key for routine updates.
 
 Measured runtime evidence and remaining physical-phone checks are recorded in
 `RUNTIME_VALIDATION.md`. Compilation alone is not acceptance.
+
+The 1.0.1 regression target is the reported physical-phone stall/page-switch
+failure. Generation state is displayed from the application worker on every
+page. Native prompt-processing counts distinguish prefill from streamed output.
+Prompt history is bounded to 1,024 tokens when trimming older turns, within a
+2,048-token model context; the database retains full messages. CPU batches are
+bounded to 32. Diagnostics → Copy includes the live native log, progress, RAM,
+service state and recent Android process-exit reasons.

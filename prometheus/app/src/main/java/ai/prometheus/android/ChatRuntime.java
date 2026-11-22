@@ -33,9 +33,16 @@ final class ChatRuntime {
     }
     private void stage(String detail) {
         stage = detail;
-        store.putSetting("last_inference", detail);
-        if (generating && !probing) store.partial(partial, detail);
+        try {
+            store.putSetting("last_inference", detail);
+            if (generating && !probing) store.partial(partial, detail);
+        } catch (RuntimeException error) { Log.e("PrometheusStore", "Could not persist inference status", error); }
         Log.i("PrometheusInference", detail);
+    }
+    String displayStatus() {
+        String text = stage;
+        if (generating && started > 0) text += " · " + Math.max(0, (System.currentTimeMillis()-started)/1000) + " s";
+        return text;
     }
     synchronized Future<?> load(File file) {
         if (ready && path.equals(file.getAbsolutePath()) && engine.isHealthy())
@@ -51,12 +58,20 @@ final class ChatRuntime {
             return CompletableFuture.completedFuture(null);
         }
         load = work.submit(() -> {
+            PowerManager.WakeLock wake = null;
             try {
+                wake = ((PowerManager) context.getSystemService(Context.POWER_SERVICE))
+                        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Prometheus:model-loading");
+                wake.acquire(10 * 60 * 1000L);
                 engine.load(file); ready = true; stage("Model ready");
             } catch (Throwable error) {
                 ready = false; stage("ERROR: Model loading failed: " + error);
                 Log.e("PrometheusRuntime", stage, error);
-            } finally { loading = false; PrometheusWorkService.end(context); }
+            } finally {
+                loading = false;
+                if (wake != null && wake.isHeld()) wake.release();
+                PrometheusWorkService.end(context);
+            }
         });
         return load;
     }
@@ -79,12 +94,13 @@ final class ChatRuntime {
             return true;
         }
         work.execute(() -> {
-            PowerManager.WakeLock wake = ((PowerManager) context.getSystemService(Context.POWER_SERVICE))
-                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Prometheus:conversation");
+            PowerManager.WakeLock wake = null;
             StringBuilder answer = new StringBuilder();
             String failure = null;
             long[] savedAt = {0};
             try {
+                wake = ((PowerManager) context.getSystemService(Context.POWER_SERVICE))
+                        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Prometheus:conversation");
                 wake.acquire(30 * 60 * 1000L);
                 engine.generate(store.history(profile), Math.max(48, Math.min(output, 640)), new LlamaRuntime.Stream() {
                     public void stage(String text) { ChatRuntime.this.stage(text); }
@@ -116,7 +132,7 @@ final class ChatRuntime {
                 }
                 generating = false; started = 0;
                 ready = engine.isHealthy();
-                if (wake.isHeld()) wake.release();
+                if (wake != null && wake.isHeld()) wake.release();
                 PrometheusWorkService.end(context);
             }
         });
